@@ -1,0 +1,6 @@
+{
+  "TEST-HOUR-0001": {"plan": "hourly", "duration": 3600, "dl": 5120, "ul": 1024, "used": false},
+  "TEST-DAYY-0001": {"plan": "daily", "duration": 86400, "dl": 10240, "ul": 2048, "used": false},
+  "TEST-WEEK-0001": {"plan": "weekly", "duration": 604800, "dl": 5120, "ul": 2048, "used": false},
+  "TEST-MONTH-0001": {"plan": "monthly", "duration": 2592000, "dl": 10240, "ul": 2048, "used": false}
+}
