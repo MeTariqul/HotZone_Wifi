@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
   const sinceParam = request.nextUrl.searchParams.get('since');
   const since = sinceParam ? parseInt(sinceParam, 10) : 0;
 
-  const vouchers = getNewVouchers(since);
+  const vouchers = await getNewVouchers(since);
 
   return NextResponse.json({
     vouchers,

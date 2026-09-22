@@ -9,12 +9,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'planId is required' }, { status: 400 });
     }
 
-    const plan = getPlan(planId);
+    const plan = await getPlan(planId);
     if (!plan) {
       return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
     }
 
-    const payment = createPayment(planId);
+    const payment = await createPayment(planId);
 
     return NextResponse.json({
       paymentId: payment.id,

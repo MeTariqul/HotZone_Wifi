@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'paymentId is required' }, { status: 400 });
     }
 
-    const result = completePayment(paymentId);
+    const result = await completePayment(paymentId);
 
     return NextResponse.json({
       success: true,

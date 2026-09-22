@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ valid: false, error: 'code param required' }, { status: 400 });
   }
 
-  const voucher = getVoucher(code.toUpperCase().trim());
+  const voucher = await getVoucher(code.toUpperCase().trim());
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ valid: false, error: 'code is required' }, { status: 400 });
   }
 
-  const voucher = getVoucher(code.toUpperCase().trim());
+  const voucher = await getVoucher(code.toUpperCase().trim());
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }
