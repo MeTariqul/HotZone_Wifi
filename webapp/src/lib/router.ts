@@ -1,3 +1,5 @@
+// Outbound router client — only used when ROUTER_URL is set (LAN-hosted webapp).
+// On Vercel, admin status/commands go through the DB snapshot + command queue.
 const ROUTER_URL = process.env.ROUTER_URL || '';
 const ROUTER_SECRET = process.env.ROUTER_SECRET || '';
 

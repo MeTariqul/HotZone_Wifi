@@ -13,6 +13,7 @@ const PUBLIC_API = new Set([
   '/api/auth/logout',
   '/api/auth/check',
   '/api/discount-codes/validate',
+  '/api/router/sync',
 ]);
 
 const PROTECTED_PREFIXES = ['/api/vouchers', '/api/router', '/api/admin'];

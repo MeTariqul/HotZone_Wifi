@@ -75,7 +75,7 @@ function SplashContent() {
               }),
             });
           } catch {
-            // Fallback: try via Vercel API
+            // Fallback: queue authorize via server (router runs it on next poll)
             await fetch('/api/vouchers/authorize', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

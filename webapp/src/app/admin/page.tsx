@@ -415,7 +415,8 @@ export default function AdminPage() {
                   <div className="bg-red-900/20 border border-red-800/50 rounded-lg p-4 text-red-400">
                     Router unreachable: {routerStatus.error || 'Unknown error'}
                     <p className="text-sm text-red-500/70 mt-2">
-                      Make sure ROUTER_URL and ROUTER_SECRET are set in Vercel environment variables.
+                      Waiting for the router to push a status snapshot to /api/router/sync.
+                      Ensure hotspot-sync-daemon is running and SYNC_API_KEY matches.
                     </p>
                   </div>
                 )
@@ -445,7 +446,7 @@ export default function AdminPage() {
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ action: 'block', ip: parts[1] }),
                               });
-                              fetchRouter();
+                              setTimeout(fetchRouter, 16000);
                             }}
                             className="bg-red-900/50 hover:bg-red-800 text-red-400 text-xs px-3 py-1 rounded"
                           >
@@ -458,7 +459,7 @@ export default function AdminPage() {
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ action: 'unblock', ip: parts[1] }),
                               });
-                              fetchRouter();
+                              setTimeout(fetchRouter, 16000);
                             }}
                             className="bg-emerald-900/50 hover:bg-emerald-800 text-emerald-400 text-xs px-3 py-1 rounded"
                           >
@@ -489,14 +490,14 @@ export default function AdminPage() {
                           <span className="text-slate-500">{parts[1] || '—'}</span>
                         </div>
                         <button
-                          onClick={async () => {
-                            await fetch('/api/router', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ action: 'kick', code: parts[0] }),
-                            });
-                            fetchRouter();
-                          }}
+onClick={async () => {
+                              await fetch('/api/router', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'kick', code: parts[0] }),
+                              });
+                              setTimeout(fetchRouter, 16000);
+                            }}
                           className="bg-red-900/50 hover:bg-red-800 text-red-400 text-xs px-3 py-1 rounded"
                         >
                           Kick

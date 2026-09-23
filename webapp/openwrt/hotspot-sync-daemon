@@ -1,47 +1,245 @@
 #!/bin/sh
-# OpenWrt Voucher Sync Daemon
+# OpenWrt Hotspot Sync Daemon
 # Save as: /usr/bin/hotspot-sync-daemon
 # Make executable: chmod +x /usr/bin/hotspot-sync-daemon
+#
+# Pulls new vouchers from the web app, pushes router status to
+# /api/router/sync, and runs queued admin commands (kick/block/authorize).
 
 API_BASE=$(uci -q get hotspot.main.api_base)
 API_KEY=$(uci -q get hotspot.main.api_key)
 INTERVAL=$(uci -q get hotspot.main.sync_interval)
+STATUS_INTERVAL=$(uci -q get hotspot.main.status_interval)
 CACHE_FILE="/tmp/voucher_cache.json"
 LAST_SYNC_FILE="/tmp/voucher_last_sync"
+ACK_FILE="/tmp/router_ack_queue"
+LOCAL_CGI="/www/cgi-bin/hotspot"
+CGI_SECRET_FILE="/etc/hotspot.secret"
+
 if [ -z "$API_KEY" ]; then
   echo "ERROR: hotspot.main.api_key not set" >&2
   exit 1
 fi
 [ -z "$INTERVAL" ] && INTERVAL=300
+[ -z "$STATUS_INTERVAL" ] && STATUS_INTERVAL=15
+
+ROUTER_SECRET=""
+if [ -f "$CGI_SECRET_FILE" ]; then
+  ROUTER_SECRET=$(grep '^ROUTER_SECRET=' "$CGI_SECRET_FILE" | head -n1 | cut -d= -f2- | tr -d '\r\n')
+fi
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a /var/log/hotspot.log
 }
 
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' | awk 'BEGIN{ORS=""} {gsub(/\r/,"\\r"); print}'
+}
+
+# Run local CGI and print only the JSON body (strip HTTP headers)
+run_local_cgi() {
+    local query="$1"
+    local body="$2"
+    local method="${3:-GET}"
+    if [ ! -f "$LOCAL_CGI" ]; then
+        echo '{"success":false,"error":"CGI missing"}'
+        return 1
+    fi
+    REQUEST_METHOD="$method"
+    QUERY_STRING="$query"
+    if [ -n "$body" ]; then
+        CONTENT_LENGTH=$(printf '%s' "$body" | wc -c)
+        CONTENT_LENGTH=$(echo "$CONTENT_LENGTH" | tr -d ' ')
+    else
+        CONTENT_LENGTH=0
+    fi
+    if [ -n "$ROUTER_SECRET" ]; then
+        HTTP_AUTHORIZATION="Bearer $ROUTER_SECRET"
+    else
+        HTTP_AUTHORIZATION=""
+    fi
+    export REQUEST_METHOD QUERY_STRING CONTENT_LENGTH HTTP_AUTHORIZATION
+
+    if [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+        raw=$(printf '%s' "$body" | sh "$LOCAL_CGI")
+    else
+        raw=$(sh "$LOCAL_CGI")
+    fi
+    printf '%s\n' "$raw" | awk 'seen{print} /^$/{seen=1}'
+}
+
+jf() {
+    local expr="$1"
+    local input="$2"
+    printf '%s' "$input" | jsonfilter -e "$expr" 2>/dev/null
+}
+
+json_true() {
+    [ "$1" = "true" ] || [ "$1" = "1" ]
+}
+
 sync_vouchers() {
     local since=0
     [ -f "$LAST_SYNC_FILE" ] && since=$(cat "$LAST_SYNC_FILE")
-    
+
     local response
     response=$(wget -qO- --timeout=10 \
         --header="x-api-key: $API_KEY" \
         "$API_BASE/api/vouchers/sync?since=$since" 2>/dev/null)
-    
+
     if [ $? -eq 0 ] && [ -n "$response" ]; then
         echo "$response" > "$CACHE_FILE"
         echo "$(date +%s)" > "$LAST_SYNC_FILE"
-        local count=$(echo "$response" | jsonfilter -e '@.count' 2>/dev/null || echo "0")
+        local count=$(jf '@.count' "$response")
+        [ -z "$count" ] && count=0
         log "Synced $count vouchers from server"
     else
         log "Failed to sync vouchers"
     fi
 }
 
-# Initial sync
-sync_vouchers
+queue_ack() {
+    local id="$1"
+    local ok="$2"
+    local err="$3"
+    local line
+    line=$(printf '{"id":"%s","success":%s,"error":"%s"}' \
+        "$(json_escape "$id")" "$ok" "$(json_escape "$err")")
+    if [ -f "$ACK_FILE" ] && [ -s "$ACK_FILE" ]; then
+        local existing inner
+        existing=$(cat "$ACK_FILE")
+        inner=${existing#\[}
+        inner=${inner%\]}
+        if [ -z "$inner" ]; then
+            printf '[%s]' "$line" > "$ACK_FILE"
+        else
+            printf '[%s,%s]' "$inner" "$line" > "$ACK_FILE"
+        fi
+    else
+        printf '[%s]' "$line" > "$ACK_FILE"
+    fi
+}
 
-# Loop
+run_command() {
+    local id="$1"
+    local action="$2"
+    local code="$3"
+    local ip="$4"
+    local payload="$5"
+    local out ok=false err=""
+
+    case "$action" in
+        kick)
+            out=$(run_local_cgi "kick=$code")
+            if json_true "$(jf '@.success' "$out")"; then ok=true; else err=$(jf '@.error' "$out"); fi
+            ;;
+        block)
+            out=$(run_local_cgi "block=$ip")
+            if json_true "$(jf '@.success' "$out")"; then ok=true; else err=$(jf '@.error' "$out"); fi
+            ;;
+        unblock)
+            out=$(run_local_cgi "unblock=$ip")
+            if json_true "$(jf '@.success' "$out")"; then ok=true; else err=$(jf '@.error' "$out"); fi
+            ;;
+        authorize|qos)
+            local body="$payload"
+            if [ -z "$body" ]; then
+                body=$(printf '{"code":"%s","ip":"%s"}' "$(json_escape "$code")" "$(json_escape "$ip")")
+            fi
+            out=$(run_local_cgi "$action" "$body" "POST")
+            if json_true "$(jf '@.success' "$out")"; then ok=true; else err=$(jf '@.error' "$out"); fi
+            ;;
+        *)
+            err="unknown action $action"
+            ;;
+    esac
+
+    if [ "$ok" = "true" ]; then
+        queue_ack "$id" true ""
+        log "Command $action ok ($id)"
+    else
+        [ -z "$err" ] && err="failed"
+        queue_ack "$id" false "$err"
+        log "Command $action failed ($id): $err"
+    fi
+}
+
+push_status_and_commands() {
+    local status_json clients_raw active_raw
+    status_json=$(run_local_cgi "status")
+    clients_raw=$(run_local_cgi "clients")
+    active_raw=$(run_local_cgi "active")
+
+    local active_vouchers connected_clients uptime
+    active_vouchers=$(jf '@.active_vouchers' "$status_json")
+    connected_clients=$(jf '@.connected_clients' "$status_json")
+    uptime=$(jf '@.uptime' "$status_json")
+    [ -z "$active_vouchers" ] && active_vouchers=0
+    [ -z "$connected_clients" ] && connected_clients=0
+    [ -z "$uptime" ] && uptime=0
+
+    local clients_str active_str
+    clients_str=$(jf '@.clients' "$clients_raw")
+    active_str=$(jf '@.active' "$active_raw")
+    [ -z "$clients_str" ] && clients_str=""
+    [ -z "$active_str" ] && active_str=""
+
+    local ack_json='[]'
+    if [ -f "$ACK_FILE" ] && [ -s "$ACK_FILE" ]; then
+        ack_json=$(cat "$ACK_FILE")
+        rm -f "$ACK_FILE"
+    fi
+
+    local payload
+    payload=$(printf '{"status":{"active_vouchers":%s,"connected_clients":%s,"uptime":%s},"clients":"%s","active":"%s","acks":%s}' \
+        "$active_vouchers" "$connected_clients" "$uptime" \
+        "$(json_escape "$clients_str")" "$(json_escape "$active_str")" \
+        "$ack_json")
+
+    local response
+    response=$(wget -qO- --timeout=10 \
+        --header="x-api-key: $API_KEY" \
+        --header="Content-Type: application/json" \
+        --post-data="$payload" \
+        "$API_BASE/api/router/sync" 2>/dev/null)
+
+    if [ $? -ne 0 ] || [ -z "$response" ]; then
+        if [ "$ack_json" != "[]" ]; then
+            printf '%s' "$ack_json" > "$ACK_FILE"
+        fi
+        log "Failed to push status / fetch commands"
+        return 1
+    fi
+
+    local cmd_list
+    cmd_list=$(printf '%s' "$response" | jsonfilter -e '@.commands[@]' 2>/dev/null)
+    [ -z "$cmd_list" ] && return 0
+
+    local tmp_cmds="/tmp/router_cmds.$$"
+    printf '%s\n' "$cmd_list" > "$tmp_cmds"
+    while IFS= read -r cmd; do
+        [ -z "$cmd" ] && continue
+        cid=$(printf '%s' "$cmd" | jsonfilter -e '@.id' 2>/dev/null)
+        caction=$(printf '%s' "$cmd" | jsonfilter -e '@.action' 2>/dev/null)
+        ccode=$(printf '%s' "$cmd" | jsonfilter -e '@.code' 2>/dev/null)
+        cip=$(printf '%s' "$cmd" | jsonfilter -e '@.ip' 2>/dev/null)
+        cpayload=$(printf '%s' "$cmd" | jsonfilter -e '@.payload' 2>/dev/null)
+        [ -z "$cid" ] && continue
+        run_command "$cid" "$caction" "$ccode" "$cip" "$cpayload"
+    done < "$tmp_cmds"
+    rm -f "$tmp_cmds"
+}
+
+sync_vouchers
+last_voucher_sync=$(date +%s)
+
 while true; do
-    sleep "$INTERVAL"
-    sync_vouchers
+    now=$(date +%s)
+    if [ $((now - last_voucher_sync)) -ge "$INTERVAL" ]; then
+        sync_vouchers
+        last_voucher_sync=$now
+    fi
+
+    push_status_and_commands
+    sleep "$STATUS_INTERVAL"
 done

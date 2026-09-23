@@ -73,6 +73,31 @@ async function initDb(): Promise<void> {
   await sql`ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'payment'`;
   await sql`ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS note TEXT`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS router_snapshots (
+      kind TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS router_commands (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      code TEXT,
+      ip TEXT,
+      payload TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      created_at INTEGER NOT NULL,
+      claimed_at INTEGER,
+      completed_at INTEGER
+    );
+  `;
+  await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS claimed_at INTEGER`;
+  await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS payload TEXT`;
+
   const count = await sql`SELECT COUNT(*) as c FROM plans`;
   if (Number(count[0].c) === 0) {
     await sql`
@@ -469,6 +494,115 @@ export async function createFreeVouchers(
   }
 
   return created;
+}
+
+export interface RouterSnapshot {
+  kind: string;
+  payload: string;
+  updated_at: number;
+}
+
+export interface RouterCommand {
+  id: string;
+  action: string;
+  code: string | null;
+  ip: string | null;
+  payload: string | null;
+  status: string;
+  result: string | null;
+  created_at: number;
+  claimed_at: number | null;
+  completed_at: number | null;
+}
+
+export async function upsertRouterSnapshot(
+  kind: 'status' | 'clients' | 'active',
+  payload: string
+): Promise<void> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  await sql`
+    INSERT INTO router_snapshots (kind, payload, updated_at)
+    VALUES (${kind}, ${payload}, ${now})
+    ON CONFLICT (kind) DO UPDATE SET payload = ${payload}, updated_at = ${now}
+  `;
+}
+
+export async function getRouterSnapshot(kind: string): Promise<RouterSnapshot | undefined> {
+  await initDb();
+  const sql = getSql();
+  const result = await sql`SELECT * FROM router_snapshots WHERE kind = ${kind}`;
+  return result[0] as RouterSnapshot | undefined;
+}
+
+export async function enqueueRouterCommand(
+  action: string,
+  params: { code?: string; ip?: string; payload?: string | null }
+): Promise<RouterCommand> {
+  await initDb();
+  const sql = getSql();
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  const payload = params.payload ?? null;
+  await sql`
+    INSERT INTO router_commands (id, action, code, ip, payload, status, created_at)
+    VALUES (${id}, ${action}, ${params.code || null}, ${params.ip || null}, ${payload}, 'pending', ${now})
+  `;
+  return {
+    id,
+    action,
+    code: params.code || null,
+    ip: params.ip || null,
+    payload,
+    status: 'pending',
+    result: null,
+    created_at: now,
+    claimed_at: null,
+    completed_at: null,
+  };
+}
+
+export async function claimRouterCommands(): Promise<RouterCommand[]> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  await sql`
+    UPDATE router_commands
+    SET status = 'pending', claimed_at = NULL
+    WHERE status = 'in_progress'
+      AND claimed_at IS NOT NULL
+      AND claimed_at < ${now - 60}
+  `;
+  return (await sql`
+    WITH pending AS (
+      SELECT id FROM router_commands
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT 20
+    )
+    UPDATE router_commands r
+    SET status = 'in_progress', claimed_at = ${now}
+    FROM pending p
+    WHERE r.id = p.id
+    RETURNING r.*
+  `) as RouterCommand[];
+}
+
+export async function completeRouterCommand(
+  id: string,
+  success: boolean,
+  error?: string
+): Promise<void> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  const result = success ? 'ok' : error || 'failed';
+  await sql`
+    UPDATE router_commands
+    SET status = 'done', result = ${result}, completed_at = ${now}
+    WHERE id = ${id}
+  `;
 }
 
 export async function getStats() {

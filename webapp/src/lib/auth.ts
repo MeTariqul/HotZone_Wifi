@@ -33,6 +33,12 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+export function verifySyncKey(provided: string | null): boolean {
+  const expected = process.env.SYNC_API_KEY;
+  if (!expected || !provided) return false;
+  return timingSafeEqual(provided, expected);
+}
+
 export async function createSessionToken(): Promise<string> {
   const expiry = Date.now() + SESSION_DURATION_MS;
   const payload = btoa(expiry.toString());
