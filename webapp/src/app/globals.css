@@ -1,15 +1,91 @@
 @import "tailwindcss";
 
 :root {
-  --background: #020617;
-  --foreground: #e2e8f0;
+  --background: #070b14;
+  --foreground: #e8eef9;
+  --surface: #0d1424;
+  --surface-2: #121b30;
+  --border: #1c2740;
+  --muted: #8b9bb8;
+  --primary: #22d3ee;
+  --primary-dim: #0e7490;
+  --money: #f59e0b;
+  --success: #34d399;
+  --danger: #f87171;
+  --ring: rgba(34, 211, 238, 0.45);
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-code), ui-monospace, monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+  font-family: var(--font-sans);
 }
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.35);
+  color: #f8fafc;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Subtle top signal line on app chrome */
+.signal-rule {
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  opacity: 0.55;
+  height: 1px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.code-display {
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+/* Skeleton shimmer for loading tables */
+.skeleton {
+  background: linear-gradient(90deg, #121b30 25%, #1a243c 50%, #121b30 75%);
+  background-size: 200% 100%;
+  animation: skeleton 1.2s ease-in-out infinite;
+  border-radius: 0.375rem;
+}
+
+@keyframes skeleton {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Print voucher receipt */
+@media print {
+  body {
+    background: white;
+    color: #0f172a;
+  }
+  .no-print {
+    display: none !important;
+  }
 }

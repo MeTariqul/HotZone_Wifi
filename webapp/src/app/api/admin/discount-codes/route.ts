@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listDiscountCodes, createDiscountCode, deactivateDiscountCode } from '@/lib/db';
+import {
+  listDiscountCodes,
+  createDiscountCode,
+  deactivateDiscountCode,
+  writeAudit,
+} from '@/lib/db';
 
 export async function GET() {
   try {
@@ -30,6 +35,10 @@ export async function POST(request: NextRequest) {
       max_uses,
       expires_at: expires_at || null,
     });
+    await writeAudit(
+      'discount.create',
+      `code=${created.code} type=${type} value=${value} plan=${plan_id || 'any'}`
+    );
     return NextResponse.json({ code: created }, { status: 201 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Failed to create discount code';
@@ -43,10 +52,12 @@ export async function DELETE(request: NextRequest) {
     if (!code) {
       return NextResponse.json({ error: 'code is required' }, { status: 400 });
     }
-    const ok = await deactivateDiscountCode(String(code).trim().toUpperCase());
+    const normalized = String(code).trim().toUpperCase();
+    const ok = await deactivateDiscountCode(normalized);
     if (!ok) {
       return NextResponse.json({ error: 'Code not found' }, { status: 404 });
     }
+    await writeAudit('discount.deactivate', `code=${normalized}`);
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json({ error: 'Failed to deactivate' }, { status: 500 });

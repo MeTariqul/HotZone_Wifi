@@ -4,6 +4,7 @@ import {
   getRouter,
   updateRouterMeta,
   normalizeRouterId,
+  writeAudit,
   ROUTER_ONLINE_SECONDS,
 } from '@/lib/db';
 
@@ -52,6 +53,7 @@ export async function POST(request: NextRequest) {
     if (!updated) {
       return NextResponse.json({ error: 'Router not found' }, { status: 404 });
     }
+    await writeAudit('router.update', `id=${id}`);
     return NextResponse.json({ router: decorate(updated) });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Failed to update router';

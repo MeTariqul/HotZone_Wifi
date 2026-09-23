@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRouterSnapshot, enqueueRouterCommand, resolveRouterId } from '@/lib/db';
+import {
+  getRouterSnapshot,
+  enqueueRouterCommand,
+  resolveRouterId,
+  writeAudit,
+} from '@/lib/db';
 
 const STALE_SECONDS = 90;
 
@@ -123,6 +128,15 @@ export async function POST(request: NextRequest) {
     typeof body.routerId === 'string' ? body.routerId : null
   );
   const cmd = await enqueueRouterCommand(action, { code, ip, payload, routerId });
+
+  if (action !== 'authorize') {
+    await writeAudit(
+      `router.${action}`,
+      [ip && `ip=${ip}`, code && `code=${code}`, download !== undefined && `dl=${download}`, upload !== undefined && `ul=${upload}`]
+        .filter(Boolean)
+        .join(' ') || undefined
+    );
+  }
 
   return NextResponse.json({
     success: true,

@@ -119,6 +119,16 @@ async function initDb(): Promise<void> {
   await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS payload TEXT`;
   await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS router_id TEXT`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      actor TEXT NOT NULL DEFAULT 'admin',
+      action TEXT NOT NULL,
+      detail TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `;
+
   const count = await sql`SELECT COUNT(*) as c FROM plans`;
   if (Number(count[0].c) === 0) {
     await sql`
@@ -834,4 +844,33 @@ export async function getStats() {
     totalPayments: Number(totalPayments),
     totalRevenue: Number(totalRevenue),
   };
+}
+
+export interface AuditLogEntry {
+  id: string;
+  actor: string;
+  action: string;
+  detail: string | null;
+  created_at: number;
+}
+
+export async function writeAudit(action: string, detail?: string): Promise<void> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  await sql`
+    INSERT INTO audit_logs (id, actor, action, detail, created_at)
+    VALUES (${uuidv4()}, 'admin', ${action}, ${detail ?? null}, ${now})
+  `;
+}
+
+export async function listAuditLogs(limit = 100): Promise<AuditLogEntry[]> {
+  await initDb();
+  const sql = getSql();
+  return (await sql`
+    SELECT id, actor, action, detail, created_at
+    FROM audit_logs
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${limit}
+  `) as AuditLogEntry[];
 }

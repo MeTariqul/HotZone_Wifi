@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { Alert, Button, Card, CardBody, Field, Input, Spinner } from '@/components/ui';
 
 interface Plan {
   id: string;
@@ -18,6 +19,11 @@ function formatDuration(seconds: number): string {
   if (seconds < 86400) return `${seconds / 3600} hours`;
   if (seconds < 604800) return `${seconds / 86400} days`;
   return `${seconds / 604800} weeks`;
+}
+
+function formatSpeed(kbps: number): string {
+  if (kbps >= 1024) return `${kbps / 1024} Mbps`;
+  return `${kbps} Kbps`;
 }
 
 function PayContent() {
@@ -40,22 +46,19 @@ function PayContent() {
 
   useEffect(() => {
     if (!planId) {
-      router.push('/');
+      router.replace('/');
       return;
     }
     fetch('/api/plans')
       .then(r => r.json())
       .then((plans: Plan[]) => {
         const found = plans.find(p => p.id === planId);
-        if (found) {
-          setPlan(found);
-        } else {
-          setError('Plan not found');
-        }
+        if (found) setPlan(found);
+        else setError('Plan not found. Choose another plan from the home page.');
         setLoading(false);
       })
       .catch(() => {
-        setError('Failed to load plan');
+        setError('Failed to load plan. Go back and try again.');
         setLoading(false);
       });
   }, [planId, router]);
@@ -96,11 +99,10 @@ function PayContent() {
 
   const amountToPay = appliedDiscount ? appliedDiscount.finalAmount : plan?.price_bdt ?? 0;
 
-  const handlePayment = async () => {
+  const completeCheckout = async (withDelay: boolean) => {
     if (!plan) return;
     setProcessing(true);
     setError('');
-
     try {
       const payRes = await fetch('/api/payments', {
         method: 'POST',
@@ -111,13 +113,10 @@ function PayContent() {
         }),
       });
       const payData = await payRes.json();
+      if (!payRes.ok) throw new Error(payData.error || 'Payment creation failed');
 
-      if (!payRes.ok) {
-        throw new Error(payData.error || 'Payment creation failed');
-      }
-
-      if (payData.amount > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+      if (withDelay && payData.amount > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1400));
       }
 
       const confirmRes = await fetch('/api/vouchers/generate', {
@@ -126,189 +125,166 @@ function PayContent() {
         body: JSON.stringify({ paymentId: payData.paymentId }),
       });
       const confirmData = await confirmRes.json();
+      if (!confirmRes.ok) throw new Error(confirmData.error || 'Voucher generation failed');
 
-      if (!confirmRes.ok) {
-        throw new Error(confirmData.error || 'Voucher generation failed');
-      }
-
-      router.push(`/success?code=${confirmData.voucher.code}&plan=${confirmData.voucher.plan}`);
+      router.push(
+        `/success?code=${encodeURIComponent(confirmData.voucher.code)}&plan=${encodeURIComponent(confirmData.voucher.plan)}`
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Payment failed');
       setProcessing(false);
     }
   };
 
-  const handleFreePlan = async () => {
-    if (!plan) return;
-    setProcessing(true);
-
-    try {
-      const payRes = await fetch('/api/payments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id, discountCode: appliedDiscount?.code }),
-      });
-      const payData = await payRes.json();
-
-      const confirmRes = await fetch('/api/vouchers/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paymentId: payData.paymentId }),
-      });
-      const confirmData = await confirmRes.json();
-
-      router.push(`/success?code=${confirmData.voucher.code}&plan=${confirmData.voucher.plan}`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed');
-      setProcessing(false);
-    }
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center gap-2 text-slate-400">
+        <Spinner /> Loading plan…
       </div>
     );
   }
 
   if (error && !plan) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-red-400">{error}</div>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6">
+        <Alert tone="danger">{error}</Alert>
+        <Link href="/" className="text-sm text-cyan-400 hover:text-cyan-300">
+          Back to plans
+        </Link>
       </div>
     );
   }
 
+  const free = plan?.price_bdt === 0 || amountToPay === 0;
+
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-        <div className="max-w-2xl mx-auto px-6 py-4">
-          <Link href="/" className="text-sm text-slate-500 hover:text-slate-300">
-            &larr; Back to plans
+      <div className="signal-rule" />
+      <header className="border-b border-[var(--border)] bg-[var(--surface)]/70">
+        <div className="max-w-xl mx-auto px-5 py-4 flex items-center justify-between">
+          <Link href="/" className="text-sm text-slate-400 hover:text-cyan-300">
+            ← Plans
           </Link>
+          <span className="text-xs text-slate-500">Checkout</span>
         </div>
       </header>
 
-      <main className="flex-1 max-w-2xl mx-auto px-6 py-12 w-full">
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-8">
-          <h2 className="text-2xl font-bold mb-2">Purchase: {plan?.name}</h2>
-          <p className="text-slate-400 mb-6">
-            {plan && formatDuration(plan.duration_seconds)} access at{' '}
-            {plan && plan.download_kbps >= 1024
-              ? `${plan.download_kbps / 1024} Mbps`
-              : `${plan?.download_kbps} Kbps`} download
-          </p>
-
-          <div className="bg-slate-800/50 rounded-lg p-6 mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <span className="text-slate-400">Amount</span>
-              <span className="text-3xl font-bold text-sky-400">
-                {amountToPay === 0 ? 'Free' : `৳${amountToPay}`}
-              </span>
+      <main id="main" className="flex-1 max-w-xl mx-auto px-5 py-10 w-full">
+        <Card>
+          <CardBody className="space-y-6">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-cyan-500">
+                Order summary
+              </p>
+              <h1 className="text-2xl font-bold mt-1">{plan?.name}</h1>
+              <p className="text-sm text-slate-400 mt-1">
+                {plan ? formatDuration(plan.duration_seconds) : ''} ·{' '}
+                {plan ? formatSpeed(plan.download_kbps) : ''} down ·{' '}
+                {plan ? formatSpeed(plan.upload_kbps) : ''} up
+              </p>
             </div>
-            {appliedDiscount && (
-              <div className="flex justify-between items-center mb-2 text-sm">
-                <span className="text-slate-500">Original</span>
-                <span className="text-slate-500 line-through">৳{plan?.price_bdt}</span>
-              </div>
-            )}
-            {appliedDiscount && (
-              <div className="flex justify-between items-center mb-2 text-sm">
-                <span className="text-emerald-400">Discount ({appliedDiscount.code})</span>
-                <span className="text-emerald-400">-৳{appliedDiscount.discountAmount}</span>
-              </div>
-            )}
-            {plan?.price_bdt !== 0 && amountToPay > 0 && (
-              <p className="text-xs text-slate-500">
-                Payment via bKash / Nagad (Demo Mode)
-              </p>
-            )}
-            {amountToPay === 0 && plan?.price_bdt !== 0 && (
-              <p className="text-xs text-emerald-400">
-                Discount covers full amount — free voucher
-              </p>
-            )}
-          </div>
 
-          {plan && plan.price_bdt > 0 && (
-            <div className="mb-6">
-              <label className="block text-sm text-slate-400 mb-1">Discount Code</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={discountInput}
-                  onChange={e => setDiscountInput(e.target.value.toUpperCase())}
-                  placeholder="Enter code"
-                  disabled={!!appliedDiscount}
-                  className="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-50 focus:border-sky-500 focus:outline-none"
-                />
-                {appliedDiscount ? (
-                  <button
-                    onClick={handleRemoveDiscount}
-                    className="bg-slate-700 hover:bg-slate-600 text-white text-sm px-4 py-2 rounded-lg transition-colors"
-                  >
-                    Remove
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleApplyDiscount}
-                    disabled={checkingDiscount || !discountInput.trim()}
-                    className="bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm px-4 py-2 rounded-lg transition-colors"
-                  >
-                    {checkingDiscount ? 'Checking...' : 'Apply'}
-                  </button>
-                )}
+            <div className="bg-slate-900/60 border border-[var(--border)] rounded-lg p-5 space-y-2.5">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-400">Amount due</span>
+                <span className="text-3xl font-bold text-cyan-400 tabular">
+                  {amountToPay === 0 ? 'Free' : (
+                    <>
+                      <span className="text-xl text-amber-400">৳</span>
+                      {amountToPay}
+                    </>
+                  )}
+                </span>
               </div>
-              {discountError && (
-                <p className="text-xs text-red-400 mt-1">{discountError}</p>
-              )}
               {appliedDiscount && (
-                <p className="text-xs text-emerald-400 mt-1">
-                  Code applied — you save ৳{appliedDiscount.discountAmount}
+                <>
+                  <div className="flex justify-between text-sm text-slate-500">
+                    <span>List price</span>
+                    <span className="line-through tabular">৳{plan?.price_bdt}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-emerald-400">
+                    <span>Discount · {appliedDiscount.code}</span>
+                    <span className="tabular">−৳{appliedDiscount.discountAmount}</span>
+                  </div>
+                </>
+              )}
+              {plan && plan.price_bdt > 0 && amountToPay > 0 && (
+                <p className="text-xs text-slate-500 pt-1">
+                  Payment method: bKash / Nagad (demo — no real charge)
+                </p>
+              )}
+              {amountToPay === 0 && plan && plan.price_bdt !== 0 && (
+                <p className="text-xs text-emerald-400 pt-1">
+                  Discount covers the full amount.
                 </p>
               )}
             </div>
-          )}
 
-          {error && (
-            <div className="bg-red-900/30 border border-red-800 text-red-300 rounded-lg p-4 mb-6 text-sm">
-              {error}
+            {plan && plan.price_bdt > 0 && (
+              <div>
+                {appliedDiscount ? (
+                  <div className="flex items-center justify-between gap-3 bg-emerald-950/40 border border-emerald-800/50 rounded-lg px-3.5 py-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-emerald-300 truncate">
+                        {appliedDiscount.code}
+                      </p>
+                      <p className="text-xs text-emerald-400/80">
+                        Saves ৳{appliedDiscount.discountAmount}
+                      </p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={handleRemoveDiscount}>
+                      Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <Field label="Discount code" error={discountError || undefined}>
+                    <div className="flex gap-2">
+                      <Input
+                        value={discountInput}
+                        onChange={e => setDiscountInput(e.target.value.toUpperCase())}
+                        placeholder="e.g. SAVE10"
+                        autoComplete="off"
+                        aria-label="Discount code"
+                      />
+                      <Button
+                        variant="secondary"
+                        onClick={handleApplyDiscount}
+                        disabled={checkingDiscount || !discountInput.trim()}
+                      >
+                        {checkingDiscount ? 'Checking…' : 'Apply'}
+                      </Button>
+                    </div>
+                  </Field>
+                )}
+              </div>
+            )}
+
+            {error && <Alert tone="danger">{error}</Alert>}
+
+            <div className="space-y-3">
+              <Button
+                className="w-full"
+                size="lg"
+                variant={free ? 'success' : 'primary'}
+                disabled={processing}
+                onClick={() => completeCheckout(!free)}
+              >
+                {processing ? (
+                  <>
+                    <Spinner /> {free ? 'Issuing voucher…' : 'Processing…'}
+                  </>
+                ) : free ? (
+                  'Get free voucher'
+                ) : (
+                  `Pay ৳${amountToPay} (demo)`
+                )}
+              </Button>
+              <p className="text-[11px] text-slate-600 text-center">
+                Demo checkout — no real payment is processed.
+              </p>
             </div>
-          )}
-
-          {plan?.price_bdt === 0 || amountToPay === 0 ? (
-            <button
-              onClick={handleFreePlan}
-              disabled={processing}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white font-semibold py-3 rounded-lg transition-colors"
-            >
-              {processing ? 'Generating...' : 'Get Free Voucher'}
-            </button>
-          ) : (
-            <button
-              onClick={handlePayment}
-              disabled={processing}
-              className="w-full bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 text-white font-semibold py-3 rounded-lg transition-colors"
-            >
-              {processing ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Processing Payment...
-                </span>
-              ) : (
-                `Pay ৳${amountToPay} (Demo)`
-              )}
-            </button>
-          )}
-
-          <p className="text-xs text-slate-600 text-center mt-4">
-            Demo mode: No real payment is processed
-          </p>
-        </div>
+          </CardBody>
+        </Card>
       </main>
     </div>
   );
@@ -316,11 +292,13 @@ function PayContent() {
 
 export default function PayPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Loading...</div>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-slate-400">
+          <Spinner /> <span className="ml-2">Loading…</span>
+        </div>
+      }
+    >
       <PayContent />
     </Suspense>
   );
