@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-23 (waterfall overhaul: design system, splash restyle, admin search/export/audit, analytics page).
+> Last updated: 2026-09-23 (committed + pushed `a6cbfc0` — design system, admin search/export/audit, analytics; Vercel auto-deploy).
 
 ---
 
@@ -183,7 +183,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 ## Git / history
 
 - Style: Conventional Commits — `feat:`, `fix:`, `docs:`, `chore:` (optional scope e.g. `fix(cgi): …`)
-- Recent: multi-router + per-device speed (`d069c39`), CGI ARP/status fixes (`e735fb0`, `3d3bc31`), walled-garden docs (`8bfd430`)
+- Recent: design system + admin features (`a6cbfc0`), multi-router + per-device speed (`d069c39`), CGI ARP/status fixes (`e735fb0`, `3d3bc31`), walled-garden docs (`8bfd430`)
 - Do not commit unless explicitly asked; never commit secrets
 
 ---
@@ -202,6 +202,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 | Typecheck / lint | Clean (`npx tsc --noEmit` && `npm run lint`) |
 | Tests / CI | None |
 | Root README | Stub |
+| Git / deploy | `a6cbfc0` pushed to `origin/main` → Vercel auto-deploy |
 
 ### Open / known gaps
 
@@ -218,6 +219,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-23 | `a6cbfc0` pushed: design system, splash restyle, admin search/export/audit, `/analytics` |
 | 2026-09-23 | Waterfall overhaul: design system, splash restyle, admin search/export/audit, `/analytics` page |
 | 2026-09-23 | Initial overview created; Admin link removed from public `/` |
 | 2026-09-23 | Multi-router deployed to live router; CGI ARP + voucher-log field fixes |
