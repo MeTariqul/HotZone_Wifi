@@ -65,39 +65,68 @@ rm -f /tmp/luci-*
 EOF
 ```
 
-## Firewall / Captive Portal Setup
+## Firewall / Captive Portal (NoDogSplash)
+
+The gate is **NoDogSplash 5.0.2** (`/etc/init.d/nodogsplash`, runtime conf
+`/tmp/etc/nodogsplash_cfg015847.conf`). Do **not** add fw4 LAN→WAN ACCEPT
+rules for 443/53 — those bypass the portal. Preauth allows live only in
+UCI `nodogsplash.@nodogsplash[0].preauthenticated_users`.
+
+### Walled garden (portal reachable without full internet)
 
 ```bash
-# Redirect HTTP to splash page (port 80 -> 8080)
-uci add firewall redirect
-uci set firewall.@redirect[-1].name='Hotspot Portal'
-uci set firewall.@redirect[-1].src='lan'
-uci set firewall.@redirect[-1].src_dport='80'
-uci set firewall.@redirect[-1].dest_port='8080'
-uci set firewall.@redirect[-1].proto='tcp'
-uci set firewall.@redirect[-1].target='DNAT'
-uci set firewall.@redirect[-1].dest_ip='192.168.1.1'  # router LAN IP
+uci -q delete nodogsplash.@nodogsplash[0].preauthenticated_users
+uci add_list nodogsplash.@nodogsplash[0].preauthenticated_users="allow udp port 53"
+uci add_list nodogsplash.@nodogsplash[0].preauthenticated_users="allow tcp port 53"
 
-# Allow access to API before auth
-uci add firewall rule
-uci set firewall.@rule[-1].name='Allow Hotspot API'
-uci set firewall.@rule[-1].src='lan'
-uci set firewall.@rule[-1].dest='wan'
-uci set firewall.@rule[-1].dest_port='443'
-uci set firewall.@rule[-1].proto='tcp'
-uci set firewall.@rule[-1].target='ACCEPT'
-
-# Allow DNS
-uci add firewall rule
-uci set firewall.@rule[-1].name='Allow DNS'
-uci set firewall.@rule[-1].src='lan'
-uci set firewall.@rule[-1].proto='udp'
-uci set firewall.@rule[-1].dest_port='53'
-uci set firewall.@rule[-1].target='ACCEPT'
-
-uci commit firewall
-/etc/init.d/firewall restart
+# Vercel edge IPs (re-resolve when they rotate)
+for ip in 64.29.17.3 64.29.17.67 64.29.17.131 64.29.17.195 \
+          216.198.79.3 216.198.79.67 216.198.79.131 216.198.79.195 \
+          76.76.21.112; do
+  uci add_list nodogsplash.@nodogsplash[0].preauthenticated_users="allow tcp port 443 to $ip"
+  uci add_list nodogsplash.@nodogsplash[0].preauthenticated_users="allow tcp port 80 to $ip"
+done
+uci commit nodogsplash
+/etc/init.d/nodogsplash restart
 ```
+
+NDS already DNATs preauth HTTP:80 → `192.168.1.1:2050` and REJECTs
+everything else (except DNS + walled-garden IPs). Authenticated clients
+get `FirewallRule allow all`.
+
+### Do not enable DNS catch-all
+
+`dhcp.@dnsmasq[0].address='/#/192.168.1.1'` breaks HTTPS cert validation
+for the Vercel portal. Leave it unset; real DNS must work preauth.
+
+### Block IPv6 bypass (NDS is IPv4-only)
+
+```bash
+uci set dhcp.lan.ra='disabled'
+uci set dhcp.lan.dhcpv6='disabled'
+uci commit dhcp
+mkdir -p /usr/share/nftables.d/chain-pre/forward
+echo 'iifname "br-lan" meta nfproto ipv6 ip6 nexthdr != ipv6-icmp drop' \
+  > /usr/share/nftables.d/chain-pre/forward/90-drop-lan-ipv6.nft
+fw4 reload
+```
+
+### Remove fw4 portal bypasses (if present)
+
+```bash
+uci -q delete firewall.@rule[13]   # verify name first: uci show firewall | grep 'Allow HTTPS'
+uci commit firewall
+fw4 reload
+```
+
+### Splash page
+
+Branded template: `/etc/nodogsplash/htdocs/splash.html` (vars
+`$authaction $tok $redir $error_msg`). Local fallback redirect to Vercel:
+`/www/index.html`.
+
+**Note:** Requests sourced from the router itself (wget on 192.168.1.1)
+may return HTTP 500 — test from a LAN client IP instead.
 
 ## uhttpd Configuration (for splash page on port 8080)
 
