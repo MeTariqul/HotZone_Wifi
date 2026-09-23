@@ -56,12 +56,15 @@ function SplashContent() {
         });
 
         // Authorize directly on router (client is on LAN)
-        if (clientIp) {
+        if (clientIp && routerSecret) {
           try {
-            const authorizeUrl = `http://${routerHost}/cgi-bin/hotspot?authorize&secret=${encodeURIComponent(routerSecret)}`;
+            const authorizeUrl = `http://${routerHost}/cgi-bin/hotspot?authorize`;
             await fetch(authorizeUrl, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${routerSecret}`,
+              },
               body: JSON.stringify({
                 code: data.code,
                 ip: clientIp,

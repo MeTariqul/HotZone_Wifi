@@ -21,7 +21,8 @@ export async function POST(request: NextRequest) {
         upload: result.voucher.upload_kbps,
       },
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Failed to generate voucher' }, { status: 400 });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Failed to generate voucher';
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 }

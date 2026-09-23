@@ -8,9 +8,10 @@ API_KEY=$(uci -q get hotspot.main.api_key)
 INTERVAL=$(uci -q get hotspot.main.sync_interval)
 CACHE_FILE="/tmp/voucher_cache.json"
 LAST_SYNC_FILE="/tmp/voucher_last_sync"
-
-[ -z "$API_BASE" ] && API_BASE="https://your-vercel-app.vercel.app"
-[ -z "$API_KEY" ] && API_KEY="tarif-hotspot-2024"
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: hotspot.main.api_key not set" >&2
+  exit 1
+fi
 [ -z "$INTERVAL" ] && INTERVAL=300
 
 log() {

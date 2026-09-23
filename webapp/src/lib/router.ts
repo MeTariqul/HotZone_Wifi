@@ -6,20 +6,18 @@ interface RouterResponse {
   [key: string]: unknown;
 }
 
-function buildUrl(path: string): string {
-  const sep = path.includes('?') ? '&' : '?';
-  return `${ROUTER_URL}${path}${sep}secret=${encodeURIComponent(ROUTER_SECRET)}`;
-}
-
 async function callRouter(path: string, method = 'GET', body?: unknown): Promise<RouterResponse> {
-  if (!ROUTER_URL) {
-    return { success: false, error: 'ROUTER_URL not configured' };
+  if (!ROUTER_URL || !ROUTER_SECRET) {
+    return { success: false, error: 'Router not configured' };
   }
 
   try {
-    const res = await fetch(buildUrl(path), {
+    const res = await fetch(`${ROUTER_URL}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ROUTER_SECRET}`,
+      },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(5000),
     });

@@ -29,6 +29,14 @@ function PayContent() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
+  const [discountInput, setDiscountInput] = useState('');
+  const [appliedDiscount, setAppliedDiscount] = useState<{
+    code: string;
+    discountAmount: number;
+    finalAmount: number;
+  } | null>(null);
+  const [discountError, setDiscountError] = useState('');
+  const [checkingDiscount, setCheckingDiscount] = useState(false);
 
   useEffect(() => {
     if (!planId) {
@@ -52,6 +60,42 @@ function PayContent() {
       });
   }, [planId, router]);
 
+  const handleApplyDiscount = async () => {
+    if (!plan || !discountInput.trim()) return;
+    setCheckingDiscount(true);
+    setDiscountError('');
+    try {
+      const res = await fetch('/api/discount-codes/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: discountInput.trim(), planId: plan.id }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setAppliedDiscount({
+          code: discountInput.trim().toUpperCase(),
+          discountAmount: data.discountAmount,
+          finalAmount: data.finalAmount,
+        });
+      } else {
+        setAppliedDiscount(null);
+        setDiscountError(data.error || 'Invalid discount code');
+      }
+    } catch {
+      setAppliedDiscount(null);
+      setDiscountError('Failed to check discount code');
+    }
+    setCheckingDiscount(false);
+  };
+
+  const handleRemoveDiscount = () => {
+    setAppliedDiscount(null);
+    setDiscountInput('');
+    setDiscountError('');
+  };
+
+  const amountToPay = appliedDiscount ? appliedDiscount.finalAmount : plan?.price_bdt ?? 0;
+
   const handlePayment = async () => {
     if (!plan) return;
     setProcessing(true);
@@ -61,7 +105,10 @@ function PayContent() {
       const payRes = await fetch('/api/payments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id }),
+        body: JSON.stringify({
+          planId: plan.id,
+          discountCode: appliedDiscount?.code,
+        }),
       });
       const payData = await payRes.json();
 
@@ -69,7 +116,9 @@ function PayContent() {
         throw new Error(payData.error || 'Payment creation failed');
       }
 
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (payData.amount > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
 
       const confirmRes = await fetch('/api/vouchers/generate', {
         method: 'POST',
@@ -83,8 +132,8 @@ function PayContent() {
       }
 
       router.push(`/success?code=${confirmData.voucher.code}&plan=${confirmData.voucher.plan}`);
-    } catch (err: any) {
-      setError(err.message || 'Payment failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Payment failed');
       setProcessing(false);
     }
   };
@@ -97,7 +146,7 @@ function PayContent() {
       const payRes = await fetch('/api/payments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id }),
+        body: JSON.stringify({ planId: plan.id, discountCode: appliedDiscount?.code }),
       });
       const payData = await payRes.json();
 
@@ -109,8 +158,8 @@ function PayContent() {
       const confirmData = await confirmRes.json();
 
       router.push(`/success?code=${confirmData.voucher.code}&plan=${confirmData.voucher.plan}`);
-    } catch (err: any) {
-      setError(err.message || 'Failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed');
       setProcessing(false);
     }
   };
@@ -155,15 +204,72 @@ function PayContent() {
             <div className="flex justify-between items-center mb-4">
               <span className="text-slate-400">Amount</span>
               <span className="text-3xl font-bold text-sky-400">
-                {plan?.price_bdt === 0 ? 'Free' : `৳${plan?.price_bdt}`}
+                {amountToPay === 0 ? 'Free' : `৳${amountToPay}`}
               </span>
             </div>
-            {plan?.price_bdt !== 0 && (
+            {appliedDiscount && (
+              <div className="flex justify-between items-center mb-2 text-sm">
+                <span className="text-slate-500">Original</span>
+                <span className="text-slate-500 line-through">৳{plan?.price_bdt}</span>
+              </div>
+            )}
+            {appliedDiscount && (
+              <div className="flex justify-between items-center mb-2 text-sm">
+                <span className="text-emerald-400">Discount ({appliedDiscount.code})</span>
+                <span className="text-emerald-400">-৳{appliedDiscount.discountAmount}</span>
+              </div>
+            )}
+            {plan?.price_bdt !== 0 && amountToPay > 0 && (
               <p className="text-xs text-slate-500">
                 Payment via bKash / Nagad (Demo Mode)
               </p>
             )}
+            {amountToPay === 0 && plan?.price_bdt !== 0 && (
+              <p className="text-xs text-emerald-400">
+                Discount covers full amount — free voucher
+              </p>
+            )}
           </div>
+
+          {plan && plan.price_bdt > 0 && (
+            <div className="mb-6">
+              <label className="block text-sm text-slate-400 mb-1">Discount Code</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={discountInput}
+                  onChange={e => setDiscountInput(e.target.value.toUpperCase())}
+                  placeholder="Enter code"
+                  disabled={!!appliedDiscount}
+                  className="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-50 focus:border-sky-500 focus:outline-none"
+                />
+                {appliedDiscount ? (
+                  <button
+                    onClick={handleRemoveDiscount}
+                    className="bg-slate-700 hover:bg-slate-600 text-white text-sm px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Remove
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleApplyDiscount}
+                    disabled={checkingDiscount || !discountInput.trim()}
+                    className="bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm px-4 py-2 rounded-lg transition-colors"
+                  >
+                    {checkingDiscount ? 'Checking...' : 'Apply'}
+                  </button>
+                )}
+              </div>
+              {discountError && (
+                <p className="text-xs text-red-400 mt-1">{discountError}</p>
+              )}
+              {appliedDiscount && (
+                <p className="text-xs text-emerald-400 mt-1">
+                  Code applied — you save ৳{appliedDiscount.discountAmount}
+                </p>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="bg-red-900/30 border border-red-800 text-red-300 rounded-lg p-4 mb-6 text-sm">
@@ -171,7 +277,7 @@ function PayContent() {
             </div>
           )}
 
-          {plan?.price_bdt === 0 ? (
+          {plan?.price_bdt === 0 || amountToPay === 0 ? (
             <button
               onClick={handleFreePlan}
               disabled={processing}
@@ -194,7 +300,7 @@ function PayContent() {
                   Processing Payment...
                 </span>
               ) : (
-                `Pay ৳${plan?.price_bdt} (Demo)`
+                `Pay ৳${amountToPay} (Demo)`
               )}
             </button>
           )}

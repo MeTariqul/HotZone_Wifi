@@ -3,8 +3,12 @@
 # Save as: /usr/bin/hotspot-voucher
 # Make executable: chmod +x /usr/bin/hotspot-voucher
 
-API_BASE="https://your-vercel-app.vercel.app"
-API_KEY="tarif-hotspot-2024"
+API_BASE="https://hotzone-delta.vercel.app"
+API_KEY=$(uci -q get hotspot.main.api_key)
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: hotspot.main.api_key not set" >&2
+  exit 1
+fi
 
 verify_voucher() {
     local code="$1"

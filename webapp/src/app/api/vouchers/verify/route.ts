@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getVoucher } from '@/lib/db';
 
+const CODE_RE = /^[A-Z0-9-]{4,32}$/;
+
+function normalizeCode(raw: string): string | null {
+  const code = raw.toUpperCase().trim();
+  return CODE_RE.test(code) ? code : null;
+}
+
 export async function GET(request: NextRequest) {
-  const code = request.nextUrl.searchParams.get('code');
-  if (!code) {
+  const raw = request.nextUrl.searchParams.get('code');
+  if (!raw) {
     return NextResponse.json({ valid: false, error: 'code param required' }, { status: 400 });
   }
 
-  const voucher = await getVoucher(code.toUpperCase().trim());
+  const code = normalizeCode(raw);
+  if (!code) {
+    return NextResponse.json({ valid: false, error: 'Invalid code format' }, { status: 400 });
+  }
+
+  const voucher = await getVoucher(code);
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }
@@ -26,12 +38,13 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const { code } = await request.json();
+  const body = await request.json().catch(() => ({ code: '' }));
+  const code = normalizeCode(String(body.code || ''));
   if (!code) {
-    return NextResponse.json({ valid: false, error: 'code is required' }, { status: 400 });
+    return NextResponse.json({ valid: false, error: 'Invalid code format' }, { status: 400 });
   }
 
-  const voucher = await getVoucher(code.toUpperCase().trim());
+  const voucher = await getVoucher(code);
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }

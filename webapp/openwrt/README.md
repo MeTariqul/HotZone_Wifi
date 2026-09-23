@@ -51,7 +51,7 @@ opkg install wget jsonfilter tc kmod-ifb iptables-mod-u32
 
 # Configure
 uci set hotspot.main.api_base="https://YOUR-VERCEL-APP.vercel.app"
-uci set hotspot.main.api_key="tarif-hotspot-2024"
+uci set hotspot.main.api_key="your-sync-api-key"
 uci commit hotspot
 
 # Enable services

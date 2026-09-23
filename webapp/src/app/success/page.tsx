@@ -7,7 +7,6 @@ import Link from 'next/link';
 function SuccessContent() {
   const searchParams = useSearchParams();
   const code = searchParams.get('code') || '';
-  const plan = searchParams.get('plan') || '';
 
   return (
     <div className="min-h-screen flex items-center justify-center px-6">
