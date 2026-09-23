@@ -72,6 +72,8 @@ async function initDb(): Promise<void> {
 
   await sql`ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'payment'`;
   await sql`ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS note TEXT`;
+  await sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS discount_code TEXT`;
+  await sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS original_amount_bdt INTEGER`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS router_snapshots (
