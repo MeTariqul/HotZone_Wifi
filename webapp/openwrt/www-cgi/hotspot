@@ -97,7 +97,8 @@ lookup_hostname() {
 voucher_line_for_ip() {
     local ip="$1"
     [ -r "$VOUCHER_LOG" ] || return 1
-    awk -v ip="$ip" '$4==ip {print; exit}' "$VOUCHER_LOG"
+    # fields: code mac ip started duration download upload
+    awk -v ip="$ip" '$3==ip {print; exit}' "$VOUCHER_LOG"
 }
 
 do_clients() {
