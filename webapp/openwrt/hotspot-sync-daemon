@@ -1,0 +1,46 @@
+#!/bin/sh
+# OpenWrt Voucher Sync Daemon
+# Save as: /usr/bin/hotspot-sync-daemon
+# Make executable: chmod +x /usr/bin/hotspot-sync-daemon
+
+API_BASE=$(uci -q get hotspot.main.api_base)
+API_KEY=$(uci -q get hotspot.main.api_key)
+INTERVAL=$(uci -q get hotspot.main.sync_interval)
+CACHE_FILE="/tmp/voucher_cache.json"
+LAST_SYNC_FILE="/tmp/voucher_last_sync"
+
+[ -z "$API_BASE" ] && API_BASE="https://your-vercel-app.vercel.app"
+[ -z "$API_KEY" ] && API_KEY="tarif-hotspot-2024"
+[ -z "$INTERVAL" ] && INTERVAL=300
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a /var/log/hotspot.log
+}
+
+sync_vouchers() {
+    local since=0
+    [ -f "$LAST_SYNC_FILE" ] && since=$(cat "$LAST_SYNC_FILE")
+    
+    local response
+    response=$(wget -qO- --timeout=10 \
+        --header="x-api-key: $API_KEY" \
+        "$API_BASE/api/vouchers/sync?since=$since" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$response" ]; then
+        echo "$response" > "$CACHE_FILE"
+        echo "$(date +%s)" > "$LAST_SYNC_FILE"
+        local count=$(echo "$response" | jsonfilter -e '@.count' 2>/dev/null || echo "0")
+        log "Synced $count vouchers from server"
+    else
+        log "Failed to sync vouchers"
+    fi
+}
+
+# Initial sync
+sync_vouchers
+
+# Loop
+while true; do
+    sleep "$INTERVAL"
+    sync_vouchers
+done
