@@ -68,7 +68,8 @@ do_status() {
     local uptime_s=0 active=0 clients=0
     [ -r /proc/uptime ] && uptime_s=$(cut -d. -f1 /proc/uptime)
     if [ -r "$VOUCHER_LOG" ]; then
-        active=$(grep -c '^[^#]' "$VOUCHER_LOG" 2>/dev/null || echo 0)
+        active=$(grep -c '^[^#]' "$VOUCHER_LOG" 2>/dev/null)
+        [ -n "$active" ] || active=0
     fi
     # Count non-dynamic ARP entries on the LAN bridge as a proxy for connected clients.
     if [ -r /proc/net/arp ]; then
@@ -100,11 +101,13 @@ voucher_line_for_ip() {
 }
 
 do_clients() {
-    local out="" mac ip host line conn dl ul
+    local out="" ip hwd mac host line conn dl ul
     if [ -r /proc/net/arp ]; then
-        while read -r mac _ _ hwd _ ip _; do
+        # /proc/net/arp: IP HWtype Flags HWaddr Mask Device
+        while read -r ip _ _ mac _ _; do
             [ -n "$ip" ] || continue
-            [ "$hwd" = "0x0" ] && continue
+            [ -n "$mac" ] || continue
+            case "$mac" in 00:00:00:00:00:00) continue ;; esac
             host=$(lookup_hostname "$ip")
             conn=""; dl=""; ul=""
             line=$(voucher_line_for_ip "$ip" || true)
