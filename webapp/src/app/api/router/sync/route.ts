@@ -3,6 +3,8 @@ import {
   upsertRouterSnapshot,
   claimRouterCommands,
   completeRouterCommand,
+  touchRouter,
+  normalizeRouterId,
 } from '@/lib/db';
 import { verifySyncKey } from '@/lib/auth';
 
@@ -29,16 +31,24 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
+  const routerId = normalizeRouterId(asString(body.router_id));
+  if (routerId) {
+    await touchRouter(routerId, {
+      label: asString(body.label),
+      location: asString(body.location),
+    });
+  }
+
   if (body.status && typeof body.status === 'object') {
-    await upsertRouterSnapshot('status', JSON.stringify(body.status));
+    await upsertRouterSnapshot('status', JSON.stringify(body.status), routerId);
   }
   const clients = asString(body.clients);
   if (clients !== null) {
-    await upsertRouterSnapshot('clients', clients);
+    await upsertRouterSnapshot('clients', clients, routerId);
   }
   const active = asString(body.active);
   if (active !== null) {
-    await upsertRouterSnapshot('active', active);
+    await upsertRouterSnapshot('active', active, routerId);
   }
 
   const acks = Array.isArray(body.acks) ? body.acks : [];
@@ -51,7 +61,7 @@ export async function POST(request: NextRequest) {
     await completeRouterCommand(id, success, error);
   }
 
-  const claimed = await claimRouterCommands();
+  const claimed = await claimRouterCommands(routerId);
   const commands = claimed.map((c) => ({
     id: c.id,
     action: c.action,
@@ -68,7 +78,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const claimed = await claimRouterCommands();
+  const routerId = normalizeRouterId(request.nextUrl.searchParams.get('router_id'));
+  const claimed = await claimRouterCommands(routerId);
   return NextResponse.json({
     ok: true,
     commands: claimed.map((c) => ({

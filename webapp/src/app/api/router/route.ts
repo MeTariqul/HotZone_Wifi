@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRouterSnapshot, enqueueRouterCommand } from '@/lib/db';
+import { getRouterSnapshot, enqueueRouterCommand, resolveRouterId } from '@/lib/db';
 
 const STALE_SECONDS = 90;
 
@@ -15,14 +15,15 @@ function parseSnapshot(payload: string | undefined): unknown {
   return payload;
 }
 
-async function snapshotResult(kind: 'status' | 'clients' | 'active') {
-  const snap = await getRouterSnapshot(kind);
+async function snapshotResult(kind: 'status' | 'clients' | 'active', routerId: string) {
+  const snap = await getRouterSnapshot(kind, routerId);
   if (!snap) {
     return {
       success: false,
       error: 'No router snapshot yet — waiting for router to push status',
       stale: true,
       updated_at: null,
+      router_id: routerId || null,
     };
   }
 
@@ -40,6 +41,7 @@ async function snapshotResult(kind: 'status' | 'clients' | 'active') {
       stale,
       age_seconds: age,
       updated_at: snap.updated_at,
+      router_id: snap.router_id || routerId || null,
       ...(stale ? { warning: `Snapshot is ${age}s old` } : {}),
     };
   }
@@ -51,6 +53,7 @@ async function snapshotResult(kind: 'status' | 'clients' | 'active') {
       stale,
       age_seconds: age,
       updated_at: snap.updated_at,
+      router_id: snap.router_id || routerId || null,
     };
   }
 
@@ -60,6 +63,7 @@ async function snapshotResult(kind: 'status' | 'clients' | 'active') {
     stale,
     age_seconds: age,
     updated_at: snap.updated_at,
+    router_id: snap.router_id || routerId || null,
   };
 }
 
@@ -70,7 +74,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   }
 
-  const result = await snapshotResult(action);
+  const routerId = await resolveRouterId(request.nextUrl.searchParams.get('routerId'));
+  const result = await snapshotResult(action, routerId);
   return NextResponse.json(result);
 }
 
@@ -96,6 +101,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'ip required' }, { status: 400 });
   }
 
+  const download = typeof body.download === 'number' ? body.download : undefined;
+  const upload = typeof body.upload === 'number' ? body.upload : undefined;
+  if (action === 'qos' && (download === undefined || upload === undefined)) {
+    return NextResponse.json({ error: 'download and upload (kbps) required' }, { status: 400 });
+  }
+
   const payload =
     action === 'authorize' || action === 'qos'
       ? JSON.stringify({
@@ -103,17 +114,21 @@ export async function POST(request: NextRequest) {
           ip,
           mac: typeof body.mac === 'string' ? body.mac : '',
           duration: typeof body.duration === 'number' ? body.duration : undefined,
-          download: typeof body.download === 'number' ? body.download : undefined,
-          upload: typeof body.upload === 'number' ? body.upload : undefined,
+          download,
+          upload,
         })
       : null;
 
-  const cmd = await enqueueRouterCommand(action, { code, ip, payload });
+  const routerId = await resolveRouterId(
+    typeof body.routerId === 'string' ? body.routerId : null
+  );
+  const cmd = await enqueueRouterCommand(action, { code, ip, payload, routerId });
 
   return NextResponse.json({
     success: true,
     queued: true,
     id: cmd.id,
+    router_id: routerId || null,
     note: 'Command queued — router will run it on next poll (~15s)',
   });
 }

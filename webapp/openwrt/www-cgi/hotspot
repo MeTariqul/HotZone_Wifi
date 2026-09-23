@@ -1,0 +1,407 @@
+#!/bin/sh
+# HotZone local control CGI
+# Deploy as: /www/cgi-bin/hotspot  (chmod 755)
+#
+# Busybox-ash only. Invoked by hotspot-sync-daemon via run_local_cgi()
+# and by the local HTTP server. Auth: Bearer token from /etc/hotspot.secret
+# when the secret file is present; fail closed on mismatch.
+#
+# Actions:
+#   GET  status|clients|active
+#   GET  kick=<code> | block=<ip> | unblock=<ip>
+#   POST action=authorize|qos  body=JSON {code,ip,mac,duration,download,upload}
+
+CGI_SECRET_FILE="/etc/hotspot.secret"
+VOUCHER_LOG="/tmp/voucher_active.log"
+NDSCTL="$(command -v ndsctl 2>/dev/null || echo /usr/bin/ndsctl)"
+BLOCK_CHAIN="hotspot_block"
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' \
+        | awk 'BEGIN{ORS=""} {gsub(/\r/,"\\r"); print}'
+}
+
+respond() {
+    printf 'Content-Type: application/json\r\n\r\n%s\n' "$1"
+    exit 0
+}
+
+fail() {
+    respond "{\"success\":false,\"error\":\"$(json_escape "$1")\"}"
+}
+
+check_auth() {
+    [ -f "$CGI_SECRET_FILE" ] || return 0
+    expected=$(grep '^ROUTER_SECRET=' "$CGI_SECRET_FILE" | head -n1 | cut -d= -f2- | tr -d '\r\n')
+    [ -n "$expected" ] || return 0
+    auth="${HTTP_AUTHORIZATION:-}"
+    token=""
+    case "$auth" in
+        Bearer\ *) token="${auth#Bearer }" ;;
+        bearer\ *) token="${auth#bearer }" ;;
+    esac
+    [ "$token" = "$expected" ] || fail "unauthorized"
+}
+
+get_query_param() {
+    local key="$1"
+    printf '%s' "$QUERY_STRING" | tr '&' '\n' | sed -n "s/^${key}=//p" | head -n1
+}
+
+url_decode() {
+    printf '%s' "$1" | sed -e 's/+/ /g' -e 's/%20/ /g' -e 's/%3A/:/g' -e 's/%3a/:/g'
+}
+
+read_post_body() {
+    local len="${CONTENT_LENGTH:-0}"
+    [ "$len" -gt 0 ] 2>/dev/null || return 0
+    dd bs=1 count="$len" 2>/dev/null
+}
+
+jf() {
+    printf '%s' "$2" | jsonfilter -e "$1" 2>/dev/null
+}
+
+# --- status ---------------------------------------------------------------
+
+do_status() {
+    local uptime_s=0 active=0 clients=0
+    [ -r /proc/uptime ] && uptime_s=$(cut -d. -f1 /proc/uptime)
+    if [ -r "$VOUCHER_LOG" ]; then
+        active=$(grep -c '^[^#]' "$VOUCHER_LOG" 2>/dev/null || echo 0)
+    fi
+    # Count non-dynamic ARP entries on the LAN bridge as a proxy for connected clients.
+    if [ -r /proc/net/arp ]; then
+        clients=$(awk 'NR>1 && $3 != "0x0" {c++} END{print c+0}' /proc/net/arp)
+    fi
+    respond "{\"success\":true,\"active_vouchers\":${active:-0},\"connected_clients\":${clients:-0},\"uptime\":${uptime_s:-0}}"
+}
+
+# --- richer clients -------------------------------------------------------
+# Format (comma-separated): mac|ip|hostname|connected_at|dl_kbps|ul_kbps
+# connected_at empty if unknown; kbps from voucher_active.log when known.
+
+lookup_hostname() {
+    local ip="$1"
+    local h=""
+    if [ -r /etc/hosts ]; then
+        h=$(awk -v ip="$ip" '$1==ip {print $2; exit}' /etc/hosts)
+    fi
+    if [ -z "$h" ] && [ -x /usr/bin/nslookup ]; then
+        h=$(nslookup "$ip" 2>/dev/null | awk '/name = /{print $4; exit}' | sed 's/\.$//')
+    fi
+    printf '%s' "$h"
+}
+
+voucher_line_for_ip() {
+    local ip="$1"
+    [ -r "$VOUCHER_LOG" ] || return 1
+    awk -v ip="$ip" '$4==ip {print; exit}' "$VOUCHER_LOG"
+}
+
+do_clients() {
+    local out="" mac ip host line conn dl ul
+    if [ -r /proc/net/arp ]; then
+        while read -r mac _ _ hwd _ ip _; do
+            [ -n "$ip" ] || continue
+            [ "$hwd" = "0x0" ] && continue
+            host=$(lookup_hostname "$ip")
+            conn=""; dl=""; ul=""
+            line=$(voucher_line_for_ip "$ip" || true)
+            if [ -n "$line" ]; then
+                # code mac ip started duration download upload
+                conn=$(printf '%s' "$line" | awk '{print $4}')
+                dl=$(printf '%s' "$line" | awk '{print $6}')
+                ul=$(printf '%s' "$line" | awk '{print $7}')
+            fi
+            entry="${mac}|${ip}|${host}|${conn}|${dl}|${ul}"
+            if [ -z "$out" ]; then
+                out="$entry"
+            else
+                out="${out},${entry}"
+            fi
+        done <<EOF
+$(awk 'NR>1 && $3 != "0x0" {print $1, $2, $3, $4, $5, $6}' /proc/net/arp)
+EOF
+    fi
+    respond "{\"success\":true,\"clients\":\"$(json_escape "$out")\"}"
+}
+
+# --- active sessions ------------------------------------------------------
+# One line per voucher: code started ip
+
+do_active() {
+    local out=""
+    if [ -r "$VOUCHER_LOG" ]; then
+        out=$(awk 'NF>=4 {print $1, $4, $3}' "$VOUCHER_LOG" 2>/dev/null)
+    fi
+    respond "{\"success\":true,\"active\":\"$(json_escape "$out")\"}"
+}
+
+# --- kick -----------------------------------------------------------------
+
+do_kick() {
+    local code="$1"
+    [ -n "$code" ] || fail "code required"
+    if [ ! -x "$NDSCTL" ] && ! command -v "$NDSCTL" >/dev/null 2>&1; then
+        fail "ndsctl not available"
+    fi
+    if "$NDSCTL" kick "$code" >/dev/null 2>&1; then
+        if [ -f "$VOUCHER_LOG" ]; then
+            sed -i "/^$code /d" "$VOUCHER_LOG" 2>/dev/null || true
+        fi
+        respond "{\"success\":true}"
+    else
+        fail "kick failed for $code"
+    fi
+}
+
+# --- block / unblock ------------------------------------------------------
+# Prefer nftables (fw4); fall back to iptables. Persist across restarts via
+# a simple list file re-applied is out of scope here — rules live until reboot
+# or explicit unblock.
+
+ensure_block_table() {
+    if command -v nft >/dev/null 2>&1; then
+        nft list table inet $BLOCK_CHAIN >/dev/null 2>&1 || \
+            nft add table inet $BLOCK_CHAIN
+        nft list chain inet $BLOCK_CHAIN forward >/dev/null 2>&1 || \
+            nft add chain inet $BLOCK_CHAIN forward '{ type filter hook forward priority 0 ; policy accept ; }'
+        return 0
+    fi
+    return 1
+}
+
+do_block() {
+    local ip="$1"
+    [ -n "$ip" ] || fail "ip required"
+    if ensure_block_table; then
+        nft add rule inet $BLOCK_CHAIN forward ip saddr "$ip" drop 2>/dev/null || true
+        nft add rule inet $BLOCK_CHAIN forward ip daddr "$ip" drop 2>/dev/null || true
+        respond "{\"success\":true}"
+    elif command -v iptables >/dev/null 2>&1; then
+        iptables -I INPUT -s "$ip" -j DROP 2>/dev/null || true
+        iptables -I OUTPUT -d "$ip" -j DROP 2>/dev/null || true
+        iptables -I FORWARD -s "$ip" -j DROP 2>/dev/null || true
+        iptables -I FORWARD -d "$ip" -j DROP 2>/dev/null || true
+        respond "{\"success\":true}"
+    else
+        fail "no firewall backend"
+    fi
+}
+
+do_unblock() {
+    local ip="$1"
+    [ -n "$ip" ] || fail "ip required"
+    if command -v nft >/dev/null 2>&1 && nft list table inet $BLOCK_CHAIN >/dev/null 2>&1; then
+        # Flush rules mentioning the IP by re-adding others is complex in ash;
+        # delete matching rules one at a time via handle scan.
+        local handles
+        handles=$(nft -a list chain inet $BLOCK_CHAIN forward 2>/dev/null | \
+            awk -v ip="$ip" '($0 ~ ip) && /handle/ {print $NF}')
+        local h
+        for h in $handles; do
+            nft delete rule inet $BLOCK_CHAIN forward handle "$h" 2>/dev/null || true
+        done
+        respond "{\"success\":true}"
+    elif command -v iptables >/dev/null 2>&1; then
+        iptables -D INPUT -s "$ip" -j DROP 2>/dev/null || true
+        iptables -D OUTPUT -d "$ip" -j DROP 2>/dev/null || true
+        iptables -D FORWARD -s "$ip" -j DROP 2>/dev/null || true
+        iptables -D FORWARD -d "$ip" -j DROP 2>/dev/null || true
+        respond "{\"success\":true}"
+    else
+        fail "no firewall backend"
+    fi
+}
+
+# --- qos ------------------------------------------------------------------
+# kbps rates. Class id derived from last IP octet (same as hotspot-voucher.sh).
+# For an existing class use `tc class change`, not `add`.
+
+class_for_ip() {
+    printf '1:%s' "$(printf '%s' "$1" | cut -d. -f4)"
+}
+
+class_exists() {
+    local dev="$1" cid="$2"
+    tc class show dev "$dev" 2>/dev/null | grep -q "classid $cid"
+}
+
+apply_qos_dev() {
+    local dev="$1" cid="$2" rate="$3"
+    if class_exists "$dev" "$cid"; then
+        tc class change dev "$dev" parent 1:1 classid "$cid" htb rate "${rate}kbit" ceil "${rate}kbit" 2>/dev/null || \
+            tc class change dev "$dev" parent 1:1 classid "$cid" htb rate "${rate}kbit" 2>/dev/null
+    else
+        tc class add dev "$dev" parent 1:1 classid "$cid" htb rate "${rate}kbit" ceil "${rate}kbit" 2>/dev/null || true
+    fi
+}
+
+ensure_htb_root() {
+    local dev="$1"
+    tc qdisc show dev "$dev" 2>/dev/null | grep -q 'qdisc htb 1:' || \
+        tc qdisc add dev "$dev" root handle 1: htb default 10 2>/dev/null
+    tc class show dev "$dev" 2>/dev/null | grep -q 'classid 1:1' || \
+        tc class add dev "$dev" parent 1: classid 1:1 htb rate 1000mbit 2>/dev/null
+}
+
+do_qos() {
+    local body="$1"
+    local ip dl ul
+    ip=$(jf '@.ip' "$body")
+    dl=$(jf '@.download' "$body")
+    ul=$(jf '@.upload' "$body")
+    [ -n "$ip" ] || fail "ip required"
+    [ -n "$dl" ] || fail "download kbps required"
+    [ -n "$ul" ] || fail "upload kbps required"
+
+    command -v tc >/dev/null 2>&1 || fail "tc not available"
+
+    ensure_htb_root br-lan
+    ensure_htb_root ifb0 2>/dev/null || true
+
+    local cid
+    cid=$(class_for_ip "$ip")
+    # br-lan egress = upload from client perspective in existing voucher script
+    apply_qos_dev br-lan "$cid" "$ul"
+    apply_qos_dev ifb0 "$cid" "$dl"
+
+    # Make sure a filter points at this class (idempotent-ish: try add, ignore fail)
+    tc filter show dev br-lan 2>/dev/null | grep -q "flowid $cid" || \
+        tc filter add dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" flowid "$cid" 2>/dev/null || true
+    tc filter show dev ifb0 2>/dev/null | grep -q "flowid $cid" || \
+        tc filter add dev ifb0 protocol ip parent 1:0 prio 1 u32 match ip src "$ip" flowid "$cid" 2>/dev/null || true
+
+    respond "{\"success\":true,\"ip\":\"$(json_escape "$ip")\",\"download\":${dl},\"upload\":${ul}}"
+}
+
+# --- authorize ------------------------------------------------------------
+# Applies a verified voucher locally (mirrors hotspot-voucher apply path).
+
+do_authorize() {
+    local body="$1"
+    local code ip mac duration download upload
+    code=$(jf '@.code' "$body")
+    ip=$(jf '@.ip' "$body")
+    mac=$(jf '@.mac' "$body")
+    duration=$(jf '@.duration' "$body")
+    download=$(jf '@.download' "$body")
+    upload=$(jf '@.upload' "$body")
+
+    [ -n "$code" ] || fail "code required"
+    [ -n "$ip" ] || fail "ip required"
+    [ -n "$duration" ] && [ -n "$download" ] && [ -n "$upload" ] || \
+        fail "duration/download/upload required"
+
+    local started
+    started=$(date +%s)
+    printf '%s %s %s %s %s %s %s\n' \
+        "$code" "${mac:-unknown}" "$ip" "$started" "$duration" "$download" "$upload" \
+        >> "$VOUCHER_LOG"
+
+    if command -v hotspot-voucher >/dev/null 2>&1; then
+        # Reuse script for tc setup if present (best-effort)
+        hotspot-voucher apply "$code" "$mac" "$ip" >/dev/null 2>&1 || true
+    elif command -v tc >/dev/null 2>&1; then
+        local cid
+        cid=$(class_for_ip "$ip")
+        ensure_htb_root br-lan
+        ensure_htb_root ifb0 2>/dev/null || true
+        apply_qos_dev br-lan "$cid" "$upload"
+        apply_qos_dev ifb0 "$cid" "$download"
+    fi
+
+    # Schedule cleanup in background (no nohup on busybox; redirect all fds)
+    ( sleep "$duration"; \
+      if command -v hotspot-voucher >/dev/null 2>&1; then \
+        hotspot-voucher cleanup "$code" "$ip" >/dev/null 2>&1; \
+      else \
+        sed -i "/^$code /d" "$VOUCHER_LOG" 2>/dev/null || true; \
+        cid=$(class_for_ip "$ip"); \
+        tc filter del dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" 2>/dev/null || true; \
+        tc class del dev br-lan parent 1:1 classid "$cid" 2>/dev/null || true; \
+        tc filter del dev ifb0 protocol ip parent 1:0 prio 1 u32 match ip src "$ip" 2>/dev/null || true; \
+        tc class del dev ifb0 parent 1:1 classid "$cid" 2>/dev/null || true; \
+      fi \
+    ) >/dev/null 2>&1 &
+
+    respond "{\"success\":true}"
+}
+
+# --- dispatch -------------------------------------------------------------
+
+check_auth
+
+METHOD="${REQUEST_METHOD:-GET}"
+
+# Prefer explicit action= in query for POST; fall back to first query key style.
+ACTION=""
+case "$METHOD" in
+    POST)
+        QUERY_ACTION=$(get_query_param action)
+        BODY=$(read_post_body)
+        ACTION="$QUERY_ACTION"
+        if [ -z "$ACTION" ] && [ -n "$BODY" ]; then
+            # If body looks like bare JSON without action field, caller must pass action in QUERY_STRING.
+            ACTION=$(jf '@.action' "$BODY")
+        fi
+        # daemon calls: run_local_cgi "$action" "$body" POST → QUERY_STRING is the action name itself
+        if [ -z "$ACTION" ]; then
+            ACTION=$(printf '%s' "$QUERY_STRING" | cut -d'&' -f1 | cut -d= -f1)
+        fi
+        ;;
+    *)
+        BODY=""
+        # Support both "status" and "status=1" and "kick=CODE"
+        case "$QUERY_STRING" in
+            status*|clients*|active*)
+                ACTION=$(printf '%s' "$QUERY_STRING" | cut -d'&' -f1 | cut -d'=' -f1)
+                ;;
+            kick=*)
+                ACTION=kick
+                ;;
+            block=*)
+                ACTION=block
+                ;;
+            unblock=*)
+                ACTION=unblock
+                ;;
+            *)
+                ACTION=$(printf '%s' "$QUERY_STRING" | cut -d'&' -f1 | cut -d'=' -f1)
+                ;;
+        esac
+        ;;
+esac
+
+case "$ACTION" in
+    status)
+        do_status
+        ;;
+    clients)
+        do_clients
+        ;;
+    active)
+        do_active
+        ;;
+    kick)
+        do_kick "$(url_decode "$(get_query_param kick)")"
+        ;;
+    block)
+        do_block "$(url_decode "$(get_query_param block)")"
+        ;;
+    unblock)
+        do_unblock "$(url_decode "$(get_query_param unblock)")"
+        ;;
+    authorize)
+        [ -n "$BODY" ] || fail "body required"
+        do_authorize "$BODY"
+        ;;
+    qos)
+        [ -n "$BODY" ] || fail "body required"
+        do_qos "$BODY"
+        ;;
+    *)
+        fail "unknown action: ${ACTION:-empty}"
+        ;;
+esac

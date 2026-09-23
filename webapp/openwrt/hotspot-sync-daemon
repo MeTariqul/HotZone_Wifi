@@ -10,6 +10,9 @@ API_BASE=$(uci -q get hotspot.main.api_base)
 API_KEY=$(uci -q get hotspot.main.api_key)
 INTERVAL=$(uci -q get hotspot.main.sync_interval)
 STATUS_INTERVAL=$(uci -q get hotspot.main.status_interval)
+ROUTER_ID=$(uci -q get hotspot.main.router_id)
+ROUTER_LABEL=$(uci -q get hotspot.main.router_label)
+ROUTER_LOCATION=$(uci -q get hotspot.main.router_location)
 CACHE_FILE="/tmp/voucher_cache.json"
 LAST_SYNC_FILE="/tmp/voucher_last_sync"
 ACK_FILE="/tmp/router_ack_queue"
@@ -22,6 +25,18 @@ if [ -z "$API_KEY" ]; then
 fi
 [ -z "$INTERVAL" ] && INTERVAL=300
 [ -z "$STATUS_INTERVAL" ] && STATUS_INTERVAL=15
+
+# Self-register: generate a stable router_id once and persist to UCI.
+if [ -z "$ROUTER_ID" ]; then
+  if command -v uuidgen >/dev/null 2>&1; then
+    ROUTER_ID=$(uuidgen | tr 'A-Z' 'a-z')
+  else
+    ROUTER_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || \
+      printf 'r-%s-%s' "$(date +%s)" "$$")
+  fi
+  uci -q set hotspot.main.router_id="$ROUTER_ID"
+  uci -q commit hotspot
+fi
 
 ROUTER_SECRET=""
 if [ -f "$CGI_SECRET_FILE" ]; then
@@ -191,7 +206,10 @@ push_status_and_commands() {
     fi
 
     local payload
-    payload=$(printf '{"status":{"active_vouchers":%s,"connected_clients":%s,"uptime":%s},"clients":"%s","active":"%s","acks":%s}' \
+    payload=$(printf '{"router_id":"%s","label":"%s","location":"%s","status":{"active_vouchers":%s,"connected_clients":%s,"uptime":%s},"clients":"%s","active":"%s","acks":%s}' \
+        "$(json_escape "$ROUTER_ID")" \
+        "$(json_escape "$ROUTER_LABEL")" \
+        "$(json_escape "$ROUTER_LOCATION")" \
         "$active_vouchers" "$connected_clients" "$uptime" \
         "$(json_escape "$clients_str")" "$(json_escape "$active_str")" \
         "$ack_json")

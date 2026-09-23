@@ -29,6 +29,26 @@ interface RouterStatus {
   connected_clients?: number;
   uptime?: number;
   error?: string;
+  router_id?: string | null;
+}
+
+interface RouterRecord {
+  id: string;
+  label: string;
+  location: string | null;
+  registered_at: number;
+  last_seen_at: number;
+  online: boolean;
+  age_seconds: number;
+}
+
+interface ParsedClient {
+  mac: string;
+  ip: string;
+  hostname: string;
+  connectedAt: number | null;
+  downloadKbps: number | null;
+  uploadKbps: number | null;
 }
 
 interface DiscountCode {
@@ -52,6 +72,38 @@ function formatDuration(seconds: number): string {
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
+}
+
+function formatSince(ts: number): string {
+  const delta = Math.floor(Date.now() / 1000) - ts;
+  if (delta < 60) return `${delta}s ago`;
+  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+  return formatTime(ts);
+}
+
+function parseClients(raw: string): ParsedClient[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map(entry => {
+      const parts = entry.split('|');
+      const mac = parts[0] || '';
+      const ip = parts[1] || '';
+      if (!mac && !ip) return null;
+      const connectedRaw = parts[3] || '';
+      const dlRaw = parts[4] || '';
+      const ulRaw = parts[5] || '';
+      return {
+        mac,
+        ip,
+        hostname: parts[2] || '',
+        connectedAt: connectedRaw ? Number(connectedRaw) || null : null,
+        downloadKbps: dlRaw ? Number(dlRaw) || null : null,
+        uploadKbps: ulRaw ? Number(ulRaw) || null : null,
+      } satisfies ParsedClient;
+    })
+    .filter((c): c is ParsedClient => c !== null);
 }
 
 function LoginForm({ onSuccess }: { onSuccess: () => void }) {
@@ -120,7 +172,7 @@ export default function AdminPage() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'authed'>('loading');
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [activeTab, setActiveTab] = useState<'vouchers' | 'generate' | 'discounts' | 'router'>('vouchers');
+  const [activeTab, setActiveTab] = useState<'vouchers' | 'generate' | 'discounts' | 'router' | 'routers'>('vouchers');
   const [genPlan, setGenPlan] = useState('hourly');
   const [genCount, setGenCount] = useState(1);
   const [genNote, setGenNote] = useState('');
@@ -137,6 +189,12 @@ export default function AdminPage() {
   const [routerClients, setRouterClients] = useState<string>('');
   const [routerActive, setRouterActive] = useState<string>('');
   const [routerLoading, setRouterLoading] = useState(false);
+  const [routers, setRouters] = useState<RouterRecord[]>([]);
+  const [selectedRouterId, setSelectedRouterId] = useState<string | null>(null);
+  const [routersLoading, setRoutersLoading] = useState(false);
+  const [renameDraft, setRenameDraft] = useState<Record<string, { label: string; location: string }>>({});
+  const [qosDrafts, setQosDrafts] = useState<Record<string, { download: string; upload: string }>>({});
+  const [deviceActionPending, setDeviceActionPending] = useState<string | null>(null);
 
   const fetchData = useCallback(() => {
     fetch('/api/vouchers')
@@ -164,13 +222,41 @@ export default function AdminPage() {
       .catch(() => setDiscountCodes([]));
   }, []);
 
+  const routerQuery = useCallback(() => {
+    const p = new URLSearchParams({ action: 'status' });
+    if (selectedRouterId) p.set('routerId', selectedRouterId);
+    const p2 = new URLSearchParams({ action: 'clients' });
+    if (selectedRouterId) p2.set('routerId', selectedRouterId);
+    const p3 = new URLSearchParams({ action: 'active' });
+    if (selectedRouterId) p3.set('routerId', selectedRouterId);
+    return Promise.all([
+      fetch(`/api/router?${p}`).then(r => r.json()),
+      fetch(`/api/router?${p2}`).then(r => r.json()),
+      fetch(`/api/router?${p3}`).then(r => r.json()),
+    ]);
+  }, [selectedRouterId]);
+
+  const loadRouters = useCallback((signal?: { cancelled: boolean }) => {
+    return fetch('/api/admin/routers')
+      .then(r => (r.ok ? r.json() : { routers: [] }))
+      .then(data => {
+        if (signal?.cancelled) return;
+        setRouters(data.routers || []);
+      })
+      .catch(() => {
+        if (signal?.cancelled) return;
+        setRouters([]);
+      });
+  }, []);
+
+  const fetchRouters = useCallback(() => {
+    setRoutersLoading(true);
+    loadRouters().finally(() => setRoutersLoading(false));
+  }, [loadRouters]);
+
   const fetchRouter = useCallback(() => {
     setRouterLoading(true);
-    Promise.all([
-      fetch('/api/router?action=status').then(r => r.json()),
-      fetch('/api/router?action=clients').then(r => r.json()),
-      fetch('/api/router?action=active').then(r => r.json()),
-    ])
+    routerQuery()
       .then(([status, clients, active]) => {
         setRouterStatus(status);
         setRouterClients(clients.clients || '');
@@ -178,7 +264,22 @@ export default function AdminPage() {
         setRouterLoading(false);
       })
       .catch(() => setRouterLoading(false));
-  }, []);
+  }, [routerQuery]);
+
+  const queueDeviceAction = useCallback(
+    async (body: Record<string, unknown>) => {
+      const res = await fetch('/api/router', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...body,
+          ...(selectedRouterId ? { routerId: selectedRouterId } : {}),
+        }),
+      });
+      return res.ok ? res.json() : res.json().then(d => Promise.reject(new Error(d.error || 'failed')));
+    },
+    [selectedRouterId]
+  );
 
   useEffect(() => {
     fetch('/api/auth/check')
@@ -195,16 +296,22 @@ export default function AdminPage() {
   }, [fetchData]);
 
   useEffect(() => {
+    if (authState !== 'authed') return;
+    if (activeTab !== 'router' && activeTab !== 'routers') return;
+    const signal = { cancelled: false };
+    loadRouters(signal);
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [authState, activeTab, loadRouters]);
+
+  useEffect(() => {
     if (authState !== 'authed' || activeTab !== 'router') return;
     let cancelled = false;
     const run = async () => {
       setRouterLoading(true);
       try {
-        const [status, clients, active] = await Promise.all([
-          fetch('/api/router?action=status').then(r => r.json()),
-          fetch('/api/router?action=clients').then(r => r.json()),
-          fetch('/api/router?action=active').then(r => r.json()),
-        ]);
+        const [status, clients, active] = await routerQuery();
         if (!cancelled) {
           setRouterStatus(status);
           setRouterClients(clients.clients || '');
@@ -220,7 +327,7 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
     };
-  }, [authState, activeTab]);
+  }, [authState, activeTab, routerQuery]);
 
   useEffect(() => {
     if (authState === 'authed' && activeTab === 'discounts') fetchDiscounts();
@@ -286,6 +393,72 @@ export default function AdminPage() {
       body: JSON.stringify({ code }),
     });
     fetchDiscounts();
+  };
+
+  const handleRenameRouter = async (id: string) => {
+    const draft = renameDraft[id];
+    if (!draft) return;
+    await fetch('/api/admin/routers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, label: draft.label, location: draft.location }),
+    });
+    fetchRouters();
+  };
+
+  const handleSetSpeed = async (ip: string) => {
+    const draft = qosDrafts[ip];
+    if (!draft) return;
+    const download = Number(draft.download);
+    const upload = Number(draft.upload);
+    if (!Number.isFinite(download) || !Number.isFinite(upload) || download <= 0 || upload <= 0) {
+      return;
+    }
+    setDeviceActionPending(ip);
+    try {
+      await queueDeviceAction({ action: 'qos', ip, download, upload });
+      setTimeout(fetchRouter, 16000);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+    } finally {
+      setDeviceActionPending(null);
+    }
+  };
+
+  const handleBlockDevice = async (ip: string) => {
+    setDeviceActionPending(ip);
+    try {
+      await queueDeviceAction({ action: 'block', ip });
+      setTimeout(fetchRouter, 16000);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+    } finally {
+      setDeviceActionPending(null);
+    }
+  };
+
+  const handleUnblockDevice = async (ip: string) => {
+    setDeviceActionPending(ip);
+    try {
+      await queueDeviceAction({ action: 'unblock', ip });
+      setTimeout(fetchRouter, 16000);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+    } finally {
+      setDeviceActionPending(null);
+    }
+  };
+
+  const handleKickSession = async (code: string) => {
+    setDeviceActionPending(code);
+    try {
+      await queueDeviceAction({ action: 'kick', code });
+      setTimeout(fetchRouter, 16000);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+    } finally {
+      setDeviceActionPending(null);
+    }
   };
 
   if (authState === 'loading') {
@@ -370,6 +543,14 @@ export default function AdminPage() {
             Discounts
           </button>
           <button
+            onClick={() => setActiveTab('routers')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              activeTab === 'routers' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Routers
+          </button>
+          <button
             onClick={() => setActiveTab('router')}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               activeTab === 'router' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
@@ -379,8 +560,122 @@ export default function AdminPage() {
           </button>
         </div>
 
+        {activeTab === 'routers' && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Routers</h3>
+              <button
+                onClick={fetchRouters}
+                disabled={routersLoading}
+                className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800 text-white text-sm px-4 py-1.5 rounded-lg transition-colors"
+              >
+                {routersLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+            {routers.length === 0 ? (
+              <div className="text-slate-500 text-sm">
+                No routers registered yet. The daemon registers itself on first sync with a generated
+                <code className="mx-1 text-slate-400">router_id</code>.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {routers.map(r => {
+                  const draft = renameDraft[r.id] || { label: r.label, location: r.location || '' };
+                  return (
+                    <div key={r.id} className="bg-slate-800/50 rounded-lg px-4 py-4 flex flex-col md:flex-row md:items-center gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className={`inline-block w-2.5 h-2.5 rounded-full ${
+                            r.online ? 'bg-emerald-400' : 'bg-slate-600'
+                          }`}
+                          title={r.online ? 'Online' : `Last seen ${formatSince(r.last_seen_at)}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{r.label}</p>
+                          <p className="text-xs text-slate-500 font-mono truncate">{r.id}</p>
+                        </div>
+                      </div>
+                      <div className="text-sm text-slate-400 md:w-40">
+                        {r.location || <span className="text-slate-600">No location</span>}
+                      </div>
+                      <div className="text-sm text-slate-500 md:w-40">
+                        {r.online ? 'Online' : `Seen ${formatSince(r.last_seen_at)}`}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+                        <input
+                          type="text"
+                          value={draft.label}
+                          onChange={e =>
+                            setRenameDraft(prev => ({
+                              ...prev,
+                              [r.id]: { ...draft, label: e.target.value },
+                            }))
+                          }
+                          className="bg-slate-900 border border-slate-700 text-white text-sm rounded px-3 py-1.5 w-36"
+                          placeholder="Label"
+                        />
+                        <input
+                          type="text"
+                          value={draft.location}
+                          onChange={e =>
+                            setRenameDraft(prev => ({
+                              ...prev,
+                              [r.id]: { ...draft, location: e.target.value },
+                            }))
+                          }
+                          className="bg-slate-900 border border-slate-700 text-white text-sm rounded px-3 py-1.5 w-36"
+                          placeholder="Location"
+                        />
+                        <button
+                          onClick={() => handleRenameRouter(r.id)}
+                          className="bg-sky-700 hover:bg-sky-600 text-white text-xs px-3 py-1.5 rounded"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedRouterId(r.id);
+                            setActiveTab('router');
+                          }}
+                          className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1.5 rounded"
+                        >
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'router' && (
           <div className="space-y-6">
+            {/* Active router selection */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center gap-3">
+              <span className="text-sm text-slate-400">Active router:</span>
+              <select
+                value={selectedRouterId ?? ''}
+                onChange={e => setSelectedRouterId(e.target.value || null)}
+                className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-2"
+              >
+                <option value="">Default (legacy / auto)</option>
+                {routers.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                    {r.online ? ' · online' : ' · offline'}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => setActiveTab('routers')}
+                className="text-xs text-slate-500 hover:text-slate-300 underline"
+              >
+                Manage routers
+              </button>
+            </div>
+
             {/* Router Status */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
               <div className="flex items-center justify-between mb-4">
@@ -430,40 +725,81 @@ export default function AdminPage() {
               <h3 className="text-lg font-semibold mb-4">Connected Clients</h3>
               {routerClients ? (
                 <div className="space-y-2">
-                  {routerClients.split(',').map((c, i) => {
-                    const parts = c.split('|');
+                  {parseClients(routerClients).map(c => {
+                    const qos = qosDrafts[c.ip] || {
+                      download: c.downloadKbps ? String(c.downloadKbps) : '',
+                      upload: c.uploadKbps ? String(c.uploadKbps) : '',
+                    };
+                    const busy = deviceActionPending === c.ip;
                     return (
-                      <div key={i} className="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
-                        <div className="flex items-center gap-4">
-                          <span className="font-mono text-sm text-sky-400">{parts[0] || '—'}</span>
-                          <span className="font-mono text-sm text-slate-400">{parts[1] || '—'}</span>
+                      <div key={c.ip} className="bg-slate-800/50 rounded-lg px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-4 min-w-0">
+                            <span className="font-mono text-sm text-sky-400">{c.mac || '—'}</span>
+                            <span className="font-mono text-sm text-slate-400">{c.ip || '—'}</span>
+                            {c.hostname && <span className="text-sm text-slate-300">{c.hostname}</span>}
+                            {c.connectedAt && (
+                              <span className="text-xs text-slate-500">
+                                since {formatTime(c.connectedAt)}
+                              </span>
+                            )}
+                            {(c.downloadKbps || c.uploadKbps) && (
+                              <span className="text-xs text-slate-500">
+                                {c.downloadKbps ?? '—'}↓ / {c.uploadKbps ?? '—'}↑ kbps
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleUnblockDevice(c.ip)}
+                              disabled={busy}
+                              className="bg-emerald-900/50 hover:bg-emerald-800 disabled:opacity-50 text-emerald-400 text-xs px-3 py-1 rounded"
+                            >
+                              Unblock
+                            </button>
+                            <button
+                              onClick={() => handleBlockDevice(c.ip)}
+                              disabled={busy}
+                              className="bg-red-900/50 hover:bg-red-800 disabled:opacity-50 text-red-400 text-xs px-3 py-1 rounded"
+                            >
+                              Ban
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <label className="text-xs text-slate-500">Speed limit (kbps)</label>
+                          <input
+                            type="number"
+                            min={64}
+                            value={qos.download}
+                            onChange={e =>
+                              setQosDrafts(prev => ({
+                                ...prev,
+                                [c.ip]: { ...qos, download: e.target.value },
+                              }))
+                            }
+                            className="bg-slate-900 border border-slate-700 text-white text-xs rounded px-2 py-1 w-24"
+                            placeholder="Down"
+                          />
+                          <input
+                            type="number"
+                            min={64}
+                            value={qos.upload}
+                            onChange={e =>
+                              setQosDrafts(prev => ({
+                                ...prev,
+                                [c.ip]: { ...qos, upload: e.target.value },
+                              }))
+                            }
+                            className="bg-slate-900 border border-slate-700 text-white text-xs rounded px-2 py-1 w-24"
+                            placeholder="Up"
+                          />
                           <button
-                            onClick={async () => {
-                              await fetch('/api/router', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ action: 'block', ip: parts[1] }),
-                              });
-                              setTimeout(fetchRouter, 16000);
-                            }}
-                            className="bg-red-900/50 hover:bg-red-800 text-red-400 text-xs px-3 py-1 rounded"
+                            onClick={() => handleSetSpeed(c.ip)}
+                            disabled={busy}
+                            className="bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-white text-xs px-3 py-1 rounded"
                           >
-                            Block
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await fetch('/api/router', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ action: 'unblock', ip: parts[1] }),
-                              });
-                              setTimeout(fetchRouter, 16000);
-                            }}
-                            className="bg-emerald-900/50 hover:bg-emerald-800 text-emerald-400 text-xs px-3 py-1 rounded"
-                          >
-                            Unblock
+                            {busy ? 'Queuing...' : 'Set speed'}
                           </button>
                         </div>
                       </div>
@@ -482,25 +818,20 @@ export default function AdminPage() {
                 <div className="space-y-2">
                   {routerActive.split('\n').filter(Boolean).map((line, i) => {
                     const parts = line.split(' ');
+                    const busy = deviceActionPending === parts[0];
                     return (
                       <div key={i} className="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
-                        <div className="flex items-center gap-4 text-sm">
+                        <div className="flex gap-4 text-sm">
                           <span className="font-mono text-sky-400">{parts[0] || '—'}</span>
                           <span className="font-mono text-slate-400">{parts[2] || '—'}</span>
                           <span className="text-slate-500">{parts[1] || '—'}</span>
                         </div>
                         <button
-onClick={async () => {
-                              await fetch('/api/router', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ action: 'kick', code: parts[0] }),
-                              });
-                              setTimeout(fetchRouter, 16000);
-                            }}
-                          className="bg-red-900/50 hover:bg-red-800 text-red-400 text-xs px-3 py-1 rounded"
+                          onClick={() => handleKickSession(parts[0])}
+                          disabled={busy}
+                          className="bg-red-900/50 hover:bg-red-800 disabled:opacity-50 text-red-400 text-xs px-3 py-1 rounded"
                         >
-                          Kick
+                          {busy ? 'Queuing...' : 'Kick'}
                         </button>
                       </div>
                     );

@@ -76,12 +76,29 @@ async function initDb(): Promise<void> {
   await sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS original_amount_bdt INTEGER`;
 
   await sql`
-    CREATE TABLE IF NOT EXISTS router_snapshots (
-      kind TEXT PRIMARY KEY,
-      payload TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+    CREATE TABLE IF NOT EXISTS routers (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      location TEXT,
+      registered_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
     );
   `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS router_snapshots (
+      router_id TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (router_id, kind)
+    );
+  `;
+  // Migrate legacy single-router snapshots (kind-only PK) to composite key.
+  await sql`ALTER TABLE router_snapshots ADD COLUMN IF NOT EXISTS router_id TEXT`;
+  await sql`UPDATE router_snapshots SET router_id = '' WHERE router_id IS NULL`;
+  await sql`ALTER TABLE router_snapshots DROP CONSTRAINT IF EXISTS router_snapshots_pkey`;
+  await sql`ALTER TABLE router_snapshots ADD PRIMARY KEY (router_id, kind)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS router_commands (
@@ -94,11 +111,13 @@ async function initDb(): Promise<void> {
       result TEXT,
       created_at INTEGER NOT NULL,
       claimed_at INTEGER,
-      completed_at INTEGER
+      completed_at INTEGER,
+      router_id TEXT
     );
   `;
   await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS claimed_at INTEGER`;
   await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS payload TEXT`;
+  await sql`ALTER TABLE router_commands ADD COLUMN IF NOT EXISTS router_id TEXT`;
 
   const count = await sql`SELECT COUNT(*) as c FROM plans`;
   if (Number(count[0].c) === 0) {
@@ -498,7 +517,16 @@ export async function createFreeVouchers(
   return created;
 }
 
+export interface RouterRecord {
+  id: string;
+  label: string;
+  location: string | null;
+  registered_at: number;
+  last_seen_at: number;
+}
+
 export interface RouterSnapshot {
+  router_id: string;
   kind: string;
   payload: string;
   updated_at: number;
@@ -515,41 +543,194 @@ export interface RouterCommand {
   created_at: number;
   claimed_at: number | null;
   completed_at: number | null;
+  router_id: string | null;
+}
+
+/** A router is online if it pushed within this window (mirrors api/router STALE_SECONDS). */
+export const ROUTER_ONLINE_SECONDS = 90;
+
+/** Normalize missing/legacy router identity to the empty-string sentinel. */
+export function normalizeRouterId(routerId?: string | null): string {
+  return routerId && routerId.trim() ? routerId.trim() : '';
+}
+
+export async function touchRouter(
+  id: string,
+  opts: { label?: string | null; location?: string | null } = {}
+): Promise<RouterRecord> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  const routerId = normalizeRouterId(id);
+  if (!routerId) {
+    throw new Error('router id required');
+  }
+
+  const label = opts.label && opts.label.trim() ? opts.label.trim().slice(0, 120) : null;
+  const location =
+    opts.location !== undefined
+      ? opts.location && opts.location.trim()
+        ? opts.location.trim().slice(0, 160)
+        : null
+      : undefined;
+
+  const existing = await sql`SELECT * FROM routers WHERE id = ${routerId}`;
+  if (existing.length === 0) {
+    const inserted = await sql`
+      INSERT INTO routers (id, label, location, registered_at, last_seen_at)
+      VALUES (
+        ${routerId},
+        ${label || `Router ${routerId.slice(0, 8)}`},
+        ${location ?? null},
+        ${now},
+        ${now}
+      )
+      RETURNING *
+    `;
+    return inserted[0] as RouterRecord;
+  }
+
+  if (location !== undefined && label !== null) {
+    const updated = await sql`
+      UPDATE routers
+      SET last_seen_at = ${now}, label = ${label}, location = ${location}
+      WHERE id = ${routerId}
+      RETURNING *
+    `;
+    return updated[0] as RouterRecord;
+  }
+  if (label !== null) {
+    const updated = await sql`
+      UPDATE routers SET last_seen_at = ${now}, label = ${label} WHERE id = ${routerId} RETURNING *
+    `;
+    return updated[0] as RouterRecord;
+  }
+  const updated = await sql`
+    UPDATE routers SET last_seen_at = ${now} WHERE id = ${routerId} RETURNING *
+  `;
+  return updated[0] as RouterRecord;
+}
+
+export async function listRouters(): Promise<RouterRecord[]> {
+  await initDb();
+  const sql = getSql();
+  return (await sql`SELECT * FROM routers ORDER BY last_seen_at DESC`) as RouterRecord[];
+}
+
+export async function getRouter(id: string): Promise<RouterRecord | undefined> {
+  await initDb();
+  const sql = getSql();
+  const result = await sql`SELECT * FROM routers WHERE id = ${normalizeRouterId(id)}`;
+  return result[0] as RouterRecord | undefined;
+}
+
+export async function updateRouterMeta(
+  id: string,
+  meta: { label?: string; location?: string | null }
+): Promise<RouterRecord | undefined> {
+  await initDb();
+  const sql = getSql();
+  const routerId = normalizeRouterId(id);
+  if (!routerId) return undefined;
+
+  if (meta.label !== undefined) {
+    const label = meta.label.trim().slice(0, 120);
+    if (!label) throw new Error('label must be non-empty');
+    if (meta.location !== undefined) {
+      const location = meta.location && meta.location.trim() ? meta.location.trim().slice(0, 160) : null;
+      const result = await sql`
+        UPDATE routers SET label = ${label}, location = ${location} WHERE id = ${routerId} RETURNING *
+      `;
+      return result[0] as RouterRecord | undefined;
+    }
+    const result = await sql`
+      UPDATE routers SET label = ${label} WHERE id = ${routerId} RETURNING *
+    `;
+    return result[0] as RouterRecord | undefined;
+  }
+
+  if (meta.location !== undefined) {
+    const location = meta.location && meta.location.trim() ? meta.location.trim().slice(0, 160) : null;
+    const result = await sql`
+      UPDATE routers SET location = ${location} WHERE id = ${routerId} RETURNING *
+    `;
+    return result[0] as RouterRecord | undefined;
+  }
+
+  const result = await sql`SELECT * FROM routers WHERE id = ${routerId}`;
+  return result[0] as RouterRecord | undefined;
+}
+
+/**
+ * Resolve the router a request applies to when routerId is omitted.
+ * Prefers the sole/most-recently-seen registered router; falls back to
+ * the legacy '' sentinel so pre-migration snapshots/commands keep working.
+ */
+export async function resolveRouterId(requested?: string | null): Promise<string> {
+  const explicit = normalizeRouterId(requested);
+  if (explicit) return explicit;
+
+  await initDb();
+  const sql = getSql();
+  const routers = (await sql`
+    SELECT id FROM routers ORDER BY last_seen_at DESC LIMIT 2
+  `) as Array<{ id: string }>;
+
+  if (routers.length === 1) return normalizeRouterId(routers[0].id);
+  if (routers.length === 0) return '';
+  // Multiple routers and no explicit choice: most recently seen.
+  return normalizeRouterId(routers[0].id);
 }
 
 export async function upsertRouterSnapshot(
   kind: 'status' | 'clients' | 'active',
-  payload: string
+  payload: string,
+  routerId?: string | null
 ): Promise<void> {
   await initDb();
   const sql = getSql();
   const now = Math.floor(Date.now() / 1000);
+  const rid = normalizeRouterId(routerId);
   await sql`
-    INSERT INTO router_snapshots (kind, payload, updated_at)
-    VALUES (${kind}, ${payload}, ${now})
-    ON CONFLICT (kind) DO UPDATE SET payload = ${payload}, updated_at = ${now}
+    INSERT INTO router_snapshots (router_id, kind, payload, updated_at)
+    VALUES (${rid}, ${kind}, ${payload}, ${now})
+    ON CONFLICT (router_id, kind) DO UPDATE SET payload = ${payload}, updated_at = ${now}
   `;
 }
 
-export async function getRouterSnapshot(kind: string): Promise<RouterSnapshot | undefined> {
+export async function getRouterSnapshot(
+  kind: string,
+  routerId?: string | null
+): Promise<RouterSnapshot | undefined> {
   await initDb();
   const sql = getSql();
-  const result = await sql`SELECT * FROM router_snapshots WHERE kind = ${kind}`;
-  return result[0] as RouterSnapshot | undefined;
+  const rid = normalizeRouterId(routerId);
+  const result = await sql`
+    SELECT * FROM router_snapshots WHERE router_id = ${rid} AND kind = ${kind}
+  `;
+  if (result[0]) return result[0] as RouterSnapshot;
+  // Legacy rows created before backfill may still be reachable only via empty rid.
+  if (rid !== '') return undefined;
+  const legacy = await sql`
+    SELECT * FROM router_snapshots WHERE kind = ${kind} AND (router_id IS NULL OR router_id = '')
+    LIMIT 1
+  `;
+  return legacy[0] as RouterSnapshot | undefined;
 }
 
 export async function enqueueRouterCommand(
   action: string,
-  params: { code?: string; ip?: string; payload?: string | null }
+  params: { code?: string; ip?: string; payload?: string | null; routerId?: string | null }
 ): Promise<RouterCommand> {
   await initDb();
   const sql = getSql();
   const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const payload = params.payload ?? null;
+  const rid = normalizeRouterId(params.routerId);
   await sql`
-    INSERT INTO router_commands (id, action, code, ip, payload, status, created_at)
-    VALUES (${id}, ${action}, ${params.code || null}, ${params.ip || null}, ${payload}, 'pending', ${now})
+    INSERT INTO router_commands (id, action, code, ip, payload, status, created_at, router_id)
+    VALUES (${id}, ${action}, ${params.code || null}, ${params.ip || null}, ${payload}, 'pending', ${now}, ${rid || null})
   `;
   return {
     id,
@@ -562,24 +743,55 @@ export async function enqueueRouterCommand(
     created_at: now,
     claimed_at: null,
     completed_at: null,
+    router_id: rid || null,
   };
 }
 
-export async function claimRouterCommands(): Promise<RouterCommand[]> {
+export async function claimRouterCommands(routerId?: string | null): Promise<RouterCommand[]> {
   await initDb();
   const sql = getSql();
   const now = Math.floor(Date.now() / 1000);
+  const rid = normalizeRouterId(routerId);
+
+  // Legacy empty-id commands match both NULL and '' so mid-migration daemons still drain the queue.
+  if (rid === '') {
+    await sql`
+      UPDATE router_commands
+      SET status = 'pending', claimed_at = NULL
+      WHERE status = 'in_progress'
+        AND claimed_at IS NOT NULL
+        AND claimed_at < ${now - 60}
+        AND (router_id IS NULL OR router_id = '')
+    `;
+    return (await sql`
+      WITH pending AS (
+        SELECT id FROM router_commands
+        WHERE status = 'pending'
+          AND (router_id IS NULL OR router_id = '')
+        ORDER BY created_at ASC
+        LIMIT 20
+      )
+      UPDATE router_commands r
+      SET status = 'in_progress', claimed_at = ${now}
+      FROM pending p
+      WHERE r.id = p.id
+      RETURNING r.*
+    `) as RouterCommand[];
+  }
+
   await sql`
     UPDATE router_commands
     SET status = 'pending', claimed_at = NULL
     WHERE status = 'in_progress'
       AND claimed_at IS NOT NULL
       AND claimed_at < ${now - 60}
+      AND router_id = ${rid}
   `;
   return (await sql`
     WITH pending AS (
       SELECT id FROM router_commands
       WHERE status = 'pending'
+        AND router_id = ${rid}
       ORDER BY created_at ASC
       LIMIT 20
     )
