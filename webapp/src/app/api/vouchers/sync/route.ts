@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getNewVouchers } from '@/lib/db';
 
 // Shared secret for router authentication
-const API_KEY = 'tarif-hotspot-2024';
+const API_KEY = process.env.SYNC_API_KEY || 'tarif-hotspot-2024';
 
 export async function GET(request: NextRequest) {
   // Verify API key from header or query
