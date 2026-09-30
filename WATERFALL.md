@@ -52,10 +52,12 @@
 ## Phase 4 — Verification
 
 ```bash
-cd webapp && npx tsc --noEmit && npm run lint
+cd webapp && npx tsc --noEmit && npm run lint && npm run build
 ```
 
-Status (2026-09-23): **pass** (tsc clean, eslint clean).
+Status (2026-09-30): **pass** (tsc, eslint, next build).
+
+Local smoke tests (dev :3100, 2026-09-30): all pages 200; unauth admin APIs 401; login→session works; generate + audit + CSV export + discount create + voucher verify OK; 5× concurrent `/analytics` → 200. Fixed `initDb` cold-start race (`42P16`).
 
 Update `PROJECT_OVERVIEW.md` after every change.
 

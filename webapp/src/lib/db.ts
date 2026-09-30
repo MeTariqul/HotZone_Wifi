@@ -10,9 +10,9 @@ function getSql() {
 }
 
 let _initialized = false;
+let _initPromise: Promise<void> | null = null;
 
-async function initDb(): Promise<void> {
-  if (_initialized) return;
+async function runInit(): Promise<void> {
   const sql = getSql();
   
   await sql`
@@ -94,11 +94,33 @@ async function initDb(): Promise<void> {
       PRIMARY KEY (router_id, kind)
     );
   `;
-  // Migrate legacy single-router snapshots (kind-only PK) to composite key.
+  // Migrate legacy kind-only PK to (router_id, kind) once; skip if already composite
+  // (DROP+ADD is not safe under concurrent cold starts → 42P16).
   await sql`ALTER TABLE router_snapshots ADD COLUMN IF NOT EXISTS router_id TEXT`;
   await sql`UPDATE router_snapshots SET router_id = '' WHERE router_id IS NULL`;
-  await sql`ALTER TABLE router_snapshots DROP CONSTRAINT IF EXISTS router_snapshots_pkey`;
-  await sql`ALTER TABLE router_snapshots ADD PRIMARY KEY (router_id, kind)`;
+  await sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint c
+        WHERE c.conrelid = 'router_snapshots'::regclass
+          AND c.contype = 'p'
+          AND (
+            SELECT array_agg(a.attname::text ORDER BY a.attname)
+            FROM pg_attribute a
+            WHERE a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+          ) IS DISTINCT FROM ARRAY['kind', 'router_id']
+      ) THEN
+        ALTER TABLE router_snapshots DROP CONSTRAINT IF EXISTS router_snapshots_pkey;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          WHERE c.conrelid = 'router_snapshots'::regclass AND c.contype = 'p'
+        ) THEN
+          ALTER TABLE router_snapshots ADD PRIMARY KEY (router_id, kind);
+        END IF;
+      END IF;
+    END $$;
+  `;
 
   await sql`
     CREATE TABLE IF NOT EXISTS router_commands (
@@ -141,8 +163,21 @@ async function initDb(): Promise<void> {
         ('monthly', 'Monthly', 2592000, 10240, 2048, 500)
     `;
   }
-  
-  _initialized = true;
+}
+
+async function initDb(): Promise<void> {
+  if (_initialized) return;
+  if (!_initPromise) {
+    _initPromise = runInit()
+      .then(() => {
+        _initialized = true;
+      })
+      .catch(err => {
+        _initPromise = null;
+        throw err;
+      });
+  }
+  return _initPromise;
 }
 
 export interface Plan {

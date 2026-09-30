@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-23 (`a6cbfc0` + docs `5e80f71` pushed; Vercel live — `/analytics` 200).
+> Last updated: 2026-09-30 (smoke tests + `initDb` race/42P16 fix; local tsc/lint/build clean).
 
 ---
 
@@ -199,19 +199,19 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 | Guest pages | Restyled (`/`, `/pay`, `/success`, `/splash`) |
 | Admin | Search/status filter, CSV export, Audit tab, Live tab |
 | Analytics | `/analytics` server page |
-| Typecheck / lint | Clean (`npx tsc --noEmit` && `npm run lint`) |
-| Tests / CI | None |
+| Typecheck / lint | Clean (`npx tsc --noEmit` && `npm run lint`); `npm run build` also clean |
+| Tests / CI | No automated suite; local smoke tests (2026-09-30): pages 200, auth 401→login→200, generate/audit/export/discount/verify OK, concurrent `/analytics` 5×200 |
 | Root README | Stub |
 | Git / deploy | `a6cbfc0` / docs `5e80f71` on `origin/main` → Vercel live |
 
 ### Open / known gaps
 
-- No automated tests or CI
+- No automated tests or CI (smoke tests run manually)
 - Payment gateway is demo-only
 - `hotspot-voucher.sh` hardcodes production `api_base`
 - Legacy snapshots under router_id `''` remain in DB (harmless)
 - Clock skew can make `age_seconds` slightly negative (still counts as online)
-- Waterfall overhaul changes not yet committed
+- Fixed 2026-09-30: `initDb` concurrent cold start (`42P16` PK re-add) + `name[]`/`text[]` cast in migration DO block
 
 ---
 
@@ -219,6 +219,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | Fix `initDb` race (single-flight) + idempotent `router_snapshots` PK migration; smoke tests pass |
 | 2026-09-23 | `a6cbfc0` + `5e80f71` pushed & verified live on Vercel |
 | 2026-09-23 | `a6cbfc0` pushed: design system, splash restyle, admin search/export/audit, `/analytics` |
 | 2026-09-23 | Waterfall overhaul: design system, splash restyle, admin search/export/audit, `/analytics` page |
