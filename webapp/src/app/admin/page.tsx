@@ -52,6 +52,7 @@ interface RouterRecord {
   label: string;
   location: string | null;
   registered_at: number;
+  admin_url?: string | null;
   last_seen_at: number;
   online: boolean;
   age_seconds: number;
@@ -228,7 +229,9 @@ export default function AdminPage() {
   const [routers, setRouters] = useState<RouterRecord[]>([]);
   const [selectedRouterId, setSelectedRouterId] = useState<string | null>(null);
   const [routersLoading, setRoutersLoading] = useState(false);
-  const [renameDraft, setRenameDraft] = useState<Record<string, { label: string; location: string }>>({});
+  const [renameDraft, setRenameDraft] = useState<
+    Record<string, { label: string; location: string; adminUrl: string }>
+  >({});
   const [qosDrafts, setQosDrafts] = useState<Record<string, { download: string; upload: string }>>({});
   const [deviceActionPending, setDeviceActionPending] = useState<string | null>(null);
   const [voucherQuery, setVoucherQuery] = useState('');
@@ -523,7 +526,12 @@ export default function AdminPage() {
     await fetch('/api/admin/routers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, label: draft.label, location: draft.location }),
+      body: JSON.stringify({
+        id,
+        label: draft.label,
+        location: draft.location,
+        admin_url: draft.adminUrl || null,
+      }),
     });
     fetchRouters();
   };
@@ -699,7 +707,11 @@ export default function AdminPage() {
             ) : (
               <div className="space-y-3">
                 {routers.map(r => {
-                  const draft = renameDraft[r.id] || { label: r.label, location: r.location || '' };
+                  const draft = renameDraft[r.id] || {
+                    label: r.label,
+                    location: r.location || '',
+                    adminUrl: r.admin_url || '',
+                  };
                   return (
                     <div key={r.id} className="bg-[var(--surface-2)] border border-[var(--border)] rounded-lg px-4 py-4 flex flex-col md:flex-row md:items-center gap-4">
                       <div className="flex items-center gap-3 min-w-0">
@@ -750,6 +762,18 @@ export default function AdminPage() {
                           className="w-36 py-1.5 text-sm"
                           placeholder="Location"
                         />
+                        <Input
+                          type="url"
+                          value={draft.adminUrl}
+                          onChange={e =>
+                            setRenameDraft(prev => ({
+                              ...prev,
+                              [r.id]: { ...draft, adminUrl: e.target.value },
+                            }))
+                          }
+                          className="w-56 py-1.5 text-sm font-mono"
+                          placeholder="http://192.168.1.1:8080/cgi-bin/luci/"
+                        />
                         <Button size="sm" onClick={() => handleRenameRouter(r.id)}>
                           Save
                         </Button>
@@ -763,6 +787,19 @@ export default function AdminPage() {
                         >
                           Open
                         </Button>
+                        <a
+                          href={
+                            r.admin_url?.trim() ||
+                            draft.adminUrl ||
+                            'http://192.168.1.1:8080/cgi-bin/luci/'
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3 py-1.5 rounded-md text-sm font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/20 transition-colors whitespace-nowrap"
+                          title="Opens the router's LuCI admin (LAN only)"
+                        >
+                          Router admin
+                        </a>
                       </div>
                     </div>
                   );

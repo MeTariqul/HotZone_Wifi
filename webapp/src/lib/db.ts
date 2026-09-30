@@ -84,6 +84,7 @@ async function runInit(): Promise<void> {
       last_seen_at INTEGER NOT NULL
     );
   `;
+  await sql`ALTER TABLE routers ADD COLUMN IF NOT EXISTS admin_url TEXT`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS router_snapshots (
@@ -584,6 +585,7 @@ export interface RouterRecord {
   location: string | null;
   registered_at: number;
   last_seen_at: number;
+  admin_url: string | null;
 }
 
 export interface RouterSnapshot {
@@ -687,38 +689,41 @@ export async function getRouter(id: string): Promise<RouterRecord | undefined> {
 
 export async function updateRouterMeta(
   id: string,
-  meta: { label?: string; location?: string | null }
+  meta: { label?: string; location?: string | null; admin_url?: string | null }
 ): Promise<RouterRecord | undefined> {
   await initDb();
   const sql = getSql();
   const routerId = normalizeRouterId(id);
   if (!routerId) return undefined;
 
+  const existing = await sql`SELECT * FROM routers WHERE id = ${routerId}`;
+  const row = existing[0] as RouterRecord | undefined;
+  if (!row) return undefined;
+
+  let label = row.label;
   if (meta.label !== undefined) {
-    const label = meta.label.trim().slice(0, 120);
+    label = meta.label.trim().slice(0, 120);
     if (!label) throw new Error('label must be non-empty');
-    if (meta.location !== undefined) {
-      const location = meta.location && meta.location.trim() ? meta.location.trim().slice(0, 160) : null;
-      const result = await sql`
-        UPDATE routers SET label = ${label}, location = ${location} WHERE id = ${routerId} RETURNING *
-      `;
-      return result[0] as RouterRecord | undefined;
-    }
-    const result = await sql`
-      UPDATE routers SET label = ${label} WHERE id = ${routerId} RETURNING *
-    `;
-    return result[0] as RouterRecord | undefined;
   }
+  const location =
+    meta.location !== undefined
+      ? meta.location && meta.location.trim()
+        ? meta.location.trim().slice(0, 160)
+        : null
+      : row.location;
+  const adminUrl =
+    meta.admin_url !== undefined
+      ? meta.admin_url && meta.admin_url.trim()
+        ? meta.admin_url.trim().slice(0, 300)
+        : null
+      : row.admin_url ?? null;
 
-  if (meta.location !== undefined) {
-    const location = meta.location && meta.location.trim() ? meta.location.trim().slice(0, 160) : null;
-    const result = await sql`
-      UPDATE routers SET location = ${location} WHERE id = ${routerId} RETURNING *
-    `;
-    return result[0] as RouterRecord | undefined;
-  }
-
-  const result = await sql`SELECT * FROM routers WHERE id = ${routerId}`;
+  const result = await sql`
+    UPDATE routers
+    SET label = ${label}, location = ${location}, admin_url = ${adminUrl}
+    WHERE id = ${routerId}
+    RETURNING *
+  `;
   return result[0] as RouterRecord | undefined;
 }
 

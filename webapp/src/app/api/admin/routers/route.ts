@@ -14,6 +14,7 @@ function decorate(r: {
   location: string | null;
   registered_at: number;
   last_seen_at: number;
+  admin_url?: string | null;
 }) {
   const age = Math.floor(Date.now() / 1000) - r.last_seen_at;
   return { ...r, online: age <= ROUTER_ONLINE_SECONDS, age_seconds: age };
@@ -41,12 +42,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Router not found' }, { status: 404 });
     }
 
-    const meta: { label?: string; location?: string | null } = {};
+    const meta: { label?: string; location?: string | null; admin_url?: string | null } = {};
     if (typeof body.label === 'string') meta.label = body.label;
     if (typeof body.location === 'string' || body.location === null) meta.location = body.location;
+    if (typeof body.admin_url === 'string' || body.admin_url === null) meta.admin_url = body.admin_url;
 
-    if (meta.label === undefined && meta.location === undefined) {
-      return NextResponse.json({ error: 'label or location required' }, { status: 400 });
+    if (meta.label === undefined && meta.location === undefined && meta.admin_url === undefined) {
+      return NextResponse.json(
+        { error: 'label, location, or admin_url required' },
+        { status: 400 }
+      );
     }
 
     const updated = await updateRouterMeta(id, meta);

@@ -121,23 +121,33 @@ fw4 reload
 
 ### Splash page
 
-Branded template: `/etc/nodogsplash/htdocs/splash.html` (vars
-`$authaction $tok $redir $error_msg`). Local fallback redirect to Vercel:
-`/www/index.html`.
+Branded template: `/etc/nodogsplash/htdocs/splash.html` (repo copy:
+`openwrt/nodogsplash/splash.html`; vars `$authaction $tok $redir $error_msg`).
+HotZone design system + live plans from `/api/plans` (CORS open). Local
+fallback redirect to Vercel: `/www/index.html`.
 
 **Note:** Requests sourced from the router itself (wget on 192.168.1.1)
 may return HTTP 500 — test from a LAN client IP instead.
 
-## uhttpd Configuration (for splash page on port 8080)
+### Router admin (LuCI)
+
+Pre-auth clients may reach the router on `22`, `53`, `67`, `80`, **`8080`**,
+**`443`** (`users_to_router`). Port 80 is captive-redirected by NDS, so use:
+
+- `http://192.168.1.1:8080/cgi-bin/luci/` (uhttpd `portal` instance — lua_prefix enabled)
+- `https://192.168.1.1/cgi-bin/luci/` (self-signed cert)
+
+Admin → Routers has a **Router admin** button (per-router `routers.admin_url`;
+defaults to the 8080 URL). LAN-only — do not expose uhttpd on WAN.
 
 ```bash
-uci set uhttpd.hotspot=uhttpd
-uci set uhttpd.hotspot.listen_http='0.0.0.0:8080'
-uci set uhttpd.hotspot.home='/www/hotspot'
-uci set uhttpd.hotspot.lua_prefix='/cgi-bin/luci'
-uci set uhttpd.hotspot.lua_handler='luci.dispatcher'
+uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 8080'
+uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 443'
+uci commit nodogsplash
+uci set uhttpd.portal.lua_prefix='/cgi-bin/luci=/usr/lib/lua/luci/sgi/uhttpd.lua'
 uci commit uhttpd
 /etc/init.d/uhttpd restart
+/etc/init.d/nodogsplash restart
 ```
 
 ## Testing
