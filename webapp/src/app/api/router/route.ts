@@ -6,7 +6,7 @@ import {
   writeAudit,
 } from '@/lib/db';
 
-const STALE_SECONDS = 90;
+const STALE_SECONDS = 10;
 
 function parseSnapshot(payload: string | undefined): unknown {
   if (payload === undefined) return null;
@@ -73,15 +73,29 @@ async function snapshotResult(kind: 'status' | 'clients' | 'active', routerId: s
 }
 
 export async function GET(request: NextRequest) {
-  const action = request.nextUrl.searchParams.get('action') || 'status';
+  const rawAction = request.nextUrl.searchParams.get('action') || 'status';
+  const actions = rawAction
+    .split(',')
+    .map(a => a.trim())
+    .filter(Boolean);
 
-  if (action !== 'status' && action !== 'clients' && action !== 'active') {
+  const valid = new Set(['status', 'clients', 'active']);
+  if (actions.length === 0 || actions.some(a => !valid.has(a))) {
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   }
 
   const routerId = await resolveRouterId(request.nextUrl.searchParams.get('routerId'));
-  const result = await snapshotResult(action, routerId);
-  return NextResponse.json(result);
+
+  if (actions.length === 1) {
+    const result = await snapshotResult(actions[0] as 'status' | 'clients' | 'active', routerId);
+    return NextResponse.json(result);
+  }
+
+  // Multi-snapshot: one round-trip for live admin refresh
+  const results = await Promise.all(
+    actions.map(async a => [a, await snapshotResult(a as 'status' | 'clients' | 'active', routerId)] as const)
+  );
+  return NextResponse.json(Object.fromEntries(results));
 }
 
 const QUEUEABLE = new Set(['kick', 'block', 'unblock', 'authorize', 'qos']);
@@ -143,6 +157,6 @@ export async function POST(request: NextRequest) {
     queued: true,
     id: cmd.id,
     router_id: routerId || null,
-    note: 'Command queued — router will run it on next poll (~15s)',
+    note: 'Command queued — router will run it on next poll (~2s)',
   });
 }

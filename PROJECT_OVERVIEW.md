@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (`16d5cd3` device identity + tests pushed; Vercel verified cookie issue on verify).
+> Last updated: 2026-09-30 (real-time sync: 2s heartbeat, CRLF CGI fix, live admin auto-refresh; deployed to router).
 
 ---
 
@@ -56,15 +56,18 @@ Guest ──► NDS splash ──► /splash (Vercel) ──► /api/vouchers/ve
         direct CGI authorize              POST /api/vouchers/authorize
         (router LAN only)                 → router_commands queue
 
-hotspot-sync-daemon (router, every ~15s)
+hotspot-sync-daemon (router, every ~2s; vouchers pull every 30s)
   POST /api/router/sync  +x-api-key
   body: router_id, label, location, status, clients, active, acks
   ← commands[]: kick | block | unblock | authorize | qos
+  acks flushed immediately after running commands (done ≈ 5s)
 
 Admin /admin ──► reads router_snapshots + queues commands (no LAN path)
+  Router tab auto-refreshes every 2s via `action=status,clients,active` (one request)
+  Routers tab auto-refreshes every 3s
 ```
 
-**Staleness:** `STALE_SECONDS = 90`, `ROUTER_ONLINE_SECONDS = 90` (`webapp/src/lib/db.ts`).
+**Staleness:** `STALE_SECONDS = 10`, `ROUTER_ONLINE_SECONDS = 30` (`webapp/src/app/api/router/route.ts`, `webapp/src/lib/db.ts`).
 
 **Device identity:** httpOnly cookie `hz_device` (UUID, 365d) issued on `/api/vouchers/verify`; bound on `/api/vouchers/authorize` → `devices` + first redeem sets `vouchers.used/device_id/used_by_mac`. Verify allows re-redeem (`reused: true`) so expired sessions can reuse the code.
 
@@ -224,6 +227,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | Real-time sync: 2s heartbeat, CRLF CGI body fix (status/clients were empty), immediate ack flush, multi-snapshot GET, admin 2s live refresh; deployed to router |
 | 2026-09-30 | `16d5cd3` pushed: device identity cookie `hz_device`, first-redeem tracking, `npm test` |
 | 2026-09-30 | Device identity cookie `hz_device`, first-redeem marking, `npm test` unit suite |
 | 2026-09-30 | `bf87a35` pushed (MeTariqul): fix `initDb` race + idempotent PK migration; smoke tests pass |

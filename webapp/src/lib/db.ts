@@ -607,8 +607,8 @@ export interface RouterCommand {
   router_id: string | null;
 }
 
-/** A router is online if it pushed within this window (mirrors api/router STALE_SECONDS). */
-export const ROUTER_ONLINE_SECONDS = 90;
+/** A router is online if it pushed within this window (2s heartbeat → 30s = offline). */
+export const ROUTER_ONLINE_SECONDS = 30;
 
 /** Normalize missing/legacy router identity to the empty-string sentinel. */
 export function normalizeRouterId(routerId?: string | null): string {

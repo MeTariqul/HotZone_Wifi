@@ -52,8 +52,8 @@ opkg install wget jsonfilter tc kmod-ifb iptables-mod-u32
 # Configure
 uci set hotspot.main.api_base="https://YOUR-VERCEL-APP.vercel.app"
 uci set hotspot.main.api_key="your-sync-api-key"
-uci set hotspot.main.sync_interval="300"
-uci set hotspot.main.status_interval="15"
+uci set hotspot.main.sync_interval="30"
+uci set hotspot.main.status_interval="2"
 uci commit hotspot
 
 # Enable services
@@ -165,8 +165,8 @@ tail -f /var/log/hotspot.log
 2. **Enters voucher** → POST to `/hotspot/login` → Calls web app `/api/vouchers/verify`
 3. **On success** → Browser authorizes the router directly (`/cgi-bin/hotspot?authorize`); if that fails, `/api/vouchers/authorize` queues the command
 4. **Background sync** → `hotspot-sync-daemon`:
-   - Pulls new vouchers from `/api/vouchers/sync` every `sync_interval` (default 300s)
-   - Pushes status/clients/active to `/api/router/sync` every `status_interval` (default 15s)
+   - Pulls new vouchers from `/api/vouchers/sync` every `sync_interval` (default 30s)
+   - Pushes status/clients/active to `/api/router/sync` every `status_interval` (default 2s)
    - Receives queued admin commands (kick/block/unblock/authorize) and runs them locally
 5. **Admin dashboard** → Reads the last snapshot from the DB (no inbound connection to the router)
 

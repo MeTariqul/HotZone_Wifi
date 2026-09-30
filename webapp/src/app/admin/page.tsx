@@ -97,8 +97,8 @@ function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function formatSince(ts: number): string {
-  const delta = Math.floor(Date.now() / 1000) - ts;
+function formatSince(ts: number, nowMs: number = Date.now()): string {
+  const delta = Math.floor(nowMs / 1000) - ts;
   if (delta < 60) return `${delta}s ago`;
   if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
   if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
@@ -236,6 +236,8 @@ export default function AdminPage() {
   const [exporting, setExporting] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<number | null>(null);
+  const [liveNow, setLiveNow] = useState(() => Date.now());
 
   const fetchData = useCallback(() => {
     fetch('/api/vouchers')
@@ -264,17 +266,9 @@ export default function AdminPage() {
   }, []);
 
   const routerQuery = useCallback(() => {
-    const p = new URLSearchParams({ action: 'status' });
+    const p = new URLSearchParams({ action: 'status,clients,active' });
     if (selectedRouterId) p.set('routerId', selectedRouterId);
-    const p2 = new URLSearchParams({ action: 'clients' });
-    if (selectedRouterId) p2.set('routerId', selectedRouterId);
-    const p3 = new URLSearchParams({ action: 'active' });
-    if (selectedRouterId) p3.set('routerId', selectedRouterId);
-    return Promise.all([
-      fetch(`/api/router?${p}`).then(r => r.json()),
-      fetch(`/api/router?${p2}`).then(r => r.json()),
-      fetch(`/api/router?${p3}`).then(r => r.json()),
-    ]);
+    return fetch(`/api/router?${p}`).then(r => r.json());
   }, [selectedRouterId]);
 
   const loadRouters = useCallback((signal?: { cancelled: boolean }) => {
@@ -295,17 +289,26 @@ export default function AdminPage() {
     loadRouters().finally(() => setRoutersLoading(false));
   }, [loadRouters]);
 
+  const applyLive = useCallback((data: {
+    status?: RouterStatus;
+    clients?: { clients?: string };
+    active?: { active?: string };
+  }) => {
+    if (data.status) setRouterStatus(data.status);
+    setRouterClients(data.clients?.clients || '');
+    setRouterActive(data.active?.active || '');
+    setLiveUpdatedAt(Date.now());
+  }, []);
+
   const fetchRouter = useCallback(() => {
     setRouterLoading(true);
     routerQuery()
-      .then(([status, clients, active]) => {
-        setRouterStatus(status);
-        setRouterClients(clients.clients || '');
-        setRouterActive(active.active || '');
+      .then(data => {
+        applyLive(data);
         setRouterLoading(false);
       })
       .catch(() => setRouterLoading(false));
-  }, [routerQuery]);
+  }, [routerQuery, applyLive]);
 
   const queueDeviceAction = useCallback(
     async (body: Record<string, unknown>) => {
@@ -347,28 +350,50 @@ export default function AdminPage() {
   }, [authState, activeTab, loadRouters]);
 
   useEffect(() => {
+    if (authState !== 'authed' || activeTab !== 'router' || !liveUpdatedAt) return;
+    const id = setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [authState, activeTab, liveUpdatedAt]);
+
+  useEffect(() => {
     if (authState !== 'authed' || activeTab !== 'router') return;
     let cancelled = false;
-    const run = async () => {
-      setRouterLoading(true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
       try {
-        const [status, clients, active] = await routerQuery();
-        if (!cancelled) {
-          setRouterStatus(status);
-          setRouterClients(clients.clients || '');
-          setRouterActive(active.active || '');
-        }
+        const data = await routerQuery();
+        if (!cancelled) applyLive(data);
       } catch {
-        // ignore — panel shows unreachable state
+        // keep last snapshot; panel shows staleness
       } finally {
-        if (!cancelled) setRouterLoading(false);
+        if (!cancelled) timer = setTimeout(tick, 2000);
       }
     };
-    run();
+    tick();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
-  }, [authState, activeTab, routerQuery]);
+  }, [authState, activeTab, routerQuery, applyLive]);
+
+  useEffect(() => {
+    if (authState !== 'authed' || activeTab !== 'routers') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      loadRouters({ cancelled: false })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) timer = setTimeout(tick, 3000);
+        });
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [authState, activeTab, loadRouters]);
 
   useEffect(() => {
     if (authState === 'authed' && activeTab === 'discounts') fetchDiscounts();
@@ -514,7 +539,7 @@ export default function AdminPage() {
     setDeviceActionPending(ip);
     try {
       await queueDeviceAction({ action: 'qos', ip, download, upload });
-      setTimeout(fetchRouter, 16000);
+      setTimeout(fetchRouter, 2500);
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
     } finally {
@@ -526,7 +551,7 @@ export default function AdminPage() {
     setDeviceActionPending(ip);
     try {
       await queueDeviceAction({ action: 'block', ip });
-      setTimeout(fetchRouter, 16000);
+      setTimeout(fetchRouter, 2500);
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
     } finally {
@@ -538,7 +563,7 @@ export default function AdminPage() {
     setDeviceActionPending(ip);
     try {
       await queueDeviceAction({ action: 'unblock', ip });
-      setTimeout(fetchRouter, 16000);
+      setTimeout(fetchRouter, 2500);
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
     } finally {
@@ -550,7 +575,7 @@ export default function AdminPage() {
     setDeviceActionPending(code);
     try {
       await queueDeviceAction({ action: 'kick', code });
-      setTimeout(fetchRouter, 16000);
+      setTimeout(fetchRouter, 2500);
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
     } finally {
@@ -781,7 +806,11 @@ export default function AdminPage() {
             <Card>
               <CardHeader
                 title="Router status"
-                description="Snapshot from the last sync push"
+                description={
+                  liveUpdatedAt
+                    ? `Live · updated ${formatSince(Math.floor(liveUpdatedAt / 1000), liveNow)}`
+                    : 'Waiting for first live snapshot…'
+                }
                 actions={
                   <Button
                     variant="secondary"

@@ -23,8 +23,10 @@ if [ -z "$API_KEY" ]; then
   echo "ERROR: hotspot.main.api_key not set" >&2
   exit 1
 fi
-[ -z "$INTERVAL" ] && INTERVAL=300
-[ -z "$STATUS_INTERVAL" ] && STATUS_INTERVAL=15
+[ -z "$INTERVAL" ] && INTERVAL=30
+[ -z "$STATUS_INTERVAL" ] && STATUS_INTERVAL=2
+# Never push faster than 1s even if misconfigured (protects server + Neon)
+[ "$STATUS_INTERVAL" -lt 1 ] 2>/dev/null && STATUS_INTERVAL=1
 
 # Self-register: generate a stable router_id once and persist to UCI.
 if [ -z "$ROUTER_ID" ]; then
@@ -80,7 +82,12 @@ run_local_cgi() {
     else
         raw=$(sh "$LOCAL_CGI")
     fi
-    printf '%s\n' "$raw" | awk 'seen{print} /^$/{seen=1}'
+    # CGI may emit CRLF headers; normalize before header/body split
+    clean=$(printf '%s\n' "$raw" | tr -d '\r')
+    case "$clean" in
+        \{* ) printf '%s\n' "$clean" ;;   # already bare JSON
+        *)     printf '%s\n' "$clean" | awk 'seen{print} /^$/{seen=1}' ;;
+    esac
 }
 
 jf() {
@@ -259,5 +266,10 @@ while true; do
     fi
 
     push_status_and_commands
+    # If commands ran this cycle, flush their acks right away instead of
+    # waiting for the next interval (admin sees completion in ~1s).
+    if [ -f "$ACK_FILE" ] && [ -s "$ACK_FILE" ]; then
+        push_status_and_commands
+    fi
     sleep "$STATUS_INTERVAL"
 done
