@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (smoke tests + `initDb` race/42P16 fix; local tsc/lint/build clean).
+> Last updated: 2026-09-30 (`bf87a35` fix pushed via MeTariqul; Vercel 200s; smoke tests + tsc/lint/build clean).
 
 ---
 
@@ -202,7 +202,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 | Typecheck / lint | Clean (`npx tsc --noEmit` && `npm run lint`); `npm run build` also clean |
 | Tests / CI | No automated suite; local smoke tests (2026-09-30): pages 200, auth 401→login→200, generate/audit/export/discount/verify OK, concurrent `/analytics` 5×200 |
 | Root README | Stub |
-| Git / deploy | `a6cbfc0` / docs `5e80f71` on `origin/main` → Vercel live |
+| Git / deploy | `a6cbfc0` + fix `bf87a35` on `origin/main` (push as **MeTariqul**) → Vercel live |
 
 ### Open / known gaps
 
@@ -219,7 +219,8 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
-| 2026-09-30 | Fix `initDb` race (single-flight) + idempotent `router_snapshots` PK migration; smoke tests pass |
+| 2026-09-30 | `bf87a35` pushed (MeTariqul): fix `initDb` race + idempotent PK migration; smoke tests pass |
+| 2026-09-30 | Smoke tests; found/fixed `initDb` cold-start `42P16` + `name[]` cast |
 | 2026-09-23 | `a6cbfc0` + `5e80f71` pushed & verified live on Vercel |
 | 2026-09-23 | `a6cbfc0` pushed: design system, splash restyle, admin search/export/audit, `/analytics` |
 | 2026-09-23 | Waterfall overhaul: design system, splash restyle, admin search/export/audit, `/analytics` page |
