@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (`ddbaa0d` router splash restyle + LuCI admin access + admin Router-admin link; verified live).
+> Last updated: 2026-09-30 (`35cbde2` purchase auto-apply + fail-closed plan QoS; verified end-to-end on router).
 
 ---
 
@@ -138,6 +138,8 @@ CGI clients format: `mac|ip|hostname|connected_at|dl_kbps|ul_kbps` (comma-separa
 | `openwrt/hotspot.config` | `/etc/config/hotspot` | UCI: api_base, api_key, intervals, router_id |
 | `openwrt/hotspot.lua` + `luci/template/...` | LuCI | Local splash/login |
 | `openwrt/setup-walled-garden.sh` | run as root on router | NDS preauth + IPv6 block + fw4 cleanup |
+| `openwrt/nodogsplash/splash.html` | `/etc/nodogsplash/htdocs/splash.html` | Captive splash: HotZone design, live plans, buy link with `$clientip/$clientmac` |
+| `openwrt/nodogsplash/binauth.sh` | `/etc/nodogsplash/binauth.sh` | Voucher validation → calls CGI `authorize` so NDS logins get plan QoS |
 
 **Live router (as of last session):** `root@192.168.1.1`  
 - `router_id` = `fe94cb2c-b777-41f6-999f-9f4e9a44c840`  
@@ -202,6 +204,8 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 |------|--------|
 | Multi-router + Routers tab | Working; one live router registered & online |
 | Per-device speed / ban / kick UI | Implemented; CGI qos uses `tc class change` |
+| Plan QoS enforcement | **Fail-closed**: per-IP HTB class on br-lan (download) + WAN `eth0.2` (upload), default class `1:10` = 8kbit both devices; applied by CGI `authorize` (queue) and binauth (NDS login); verified e2e 2026-09-30 |
+| Purchase auto-apply | `/success` auto-copies code + auto-authorizes when portal `ip` present; NDS buy link passes `$clientip/$clientmac` through `/`→`/pay`→`/success`→`/splash?auto=1` |
 | Public home Admin link | **Removed** (uncommitted until user commits) |
 | Design system | Shared `src/components/ui.tsx` + tokens in `globals.css`; Plus Jakarta Sans / JetBrains Mono |
 | Guest pages | Restyled (`/`, `/pay`, `/success`, `/splash`) |
@@ -220,6 +224,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 - Legacy snapshots under router_id `''` remain in DB (harmless)
 - Clock skew can make `age_seconds` slightly negative (still counts as online)
 - Fixed 2026-09-30: `initDb` concurrent cold start (`42P16`) + `name[]` cast; **vouchers were never marked used** (now on authorize)
+- Fixed 2026-09-30: authorize queued commands with `router_id = NULL` → never claimed by daemon (now `resolveRouterId()`); ifb/mirred unavailable on router — shaping moved to br-lan egress (dl) + WAN egress (ul)
 
 ---
 
@@ -227,6 +232,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | `35cbde2` pushed: purchase auto-apply (success auto-copy/auto-authorize, splash `?auto=1`, portal ip/mac passthrough) + plan-authoritative authorize (`resolveRouterId` fix — queue was never claimed with NULL router_id) + fail-closed router QoS (br-lan dl / WAN ul per-IP classes, tiny default `1:10`, binauth→CGI authorize, splash buy link `$clientip/$clientmac`); dead legacy cron `sync-vouchers.sh` disabled |
 | 2026-09-30 | `ddbaa0d` pushed: NDS splash restyled to HotZone (live `/api/plans` + CORS); LuCI at `:8080/cgi-bin/luci` & `https://` (`users_to_router` + `uhttpd.portal.lua_prefix`); admin **Router admin** link + `routers.admin_url` |
 | 2026-09-30 | `c74dc72` pushed: real-time sync — 2s heartbeat, CRLF CGI fix, immediate ack flush, multi-snapshot GET, admin 2s live refresh; deployed to router |
 | 2026-09-30 | `16d5cd3` pushed: device identity cookie `hz_device`, first-redeem tracking, `npm test` |
