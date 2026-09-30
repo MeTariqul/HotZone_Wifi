@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (device identity cookie + first-redeem tracking + `npm test`; verified tsc/lint/build/smoke).
+> Last updated: 2026-09-30 (`16d5cd3` device identity + tests pushed; Vercel verified cookie issue on verify).
 
 ---
 
@@ -224,6 +224,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | `16d5cd3` pushed: device identity cookie `hz_device`, first-redeem tracking, `npm test` |
 | 2026-09-30 | Device identity cookie `hz_device`, first-redeem marking, `npm test` unit suite |
 | 2026-09-30 | `bf87a35` pushed (MeTariqul): fix `initDb` race + idempotent PK migration; smoke tests pass |
 | 2026-09-30 | Smoke tests; found/fixed `initDb` cold-start `42P16` + `name[]` cast |
