@@ -30,6 +30,8 @@ function PayContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const planId = searchParams.get('plan');
+  const portalIp = searchParams.get('ip') || '';
+  const portalMac = searchParams.get('mac') || '';
 
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,8 +129,11 @@ function PayContent() {
       const confirmData = await confirmRes.json();
       if (!confirmRes.ok) throw new Error(confirmData.error || 'Voucher generation failed');
 
+      const portal =
+        (portalIp ? `&ip=${encodeURIComponent(portalIp)}` : '') +
+        (portalMac ? `&mac=${encodeURIComponent(portalMac)}` : '');
       router.push(
-        `/success?code=${encodeURIComponent(confirmData.voucher.code)}&plan=${encodeURIComponent(confirmData.voucher.plan)}`
+        `/success?code=${encodeURIComponent(confirmData.voucher.code)}&plan=${encodeURIComponent(confirmData.voucher.plan)}${portal}`
       );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Payment failed');

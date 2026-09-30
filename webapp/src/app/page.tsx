@@ -52,6 +52,16 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const goPay = (planId: string) => {
+    const params = new URLSearchParams(window.location.search);
+    const ip = params.get('ip');
+    const mac = params.get('mac');
+    const portal =
+      (ip ? `&ip=${encodeURIComponent(ip)}` : '') +
+      (mac ? `&mac=${encodeURIComponent(mac)}` : '');
+    router.push(`/pay?plan=${planId}${portal}`);
+  };
+
   useEffect(() => {
     fetch('/api/plans')
       .then(r => r.json())
@@ -196,7 +206,7 @@ export default function HomePage() {
                     className="w-full"
                     size="md"
                     variant={free ? 'success' : 'primary'}
-                    onClick={() => router.push(`/pay?plan=${plan.id}`)}
+                    onClick={() => goPay(plan.id)}
                   >
                     {free ? 'Get free voucher' : 'Buy now'}
                   </Button>

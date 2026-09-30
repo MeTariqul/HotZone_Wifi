@@ -1,17 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeClient } from '@/lib/router';
-import { enqueueRouterCommand, redeemVoucher, upsertDevice } from '@/lib/db';
+import { enqueueRouterCommand, getVoucher, redeemVoucher, resolveRouterId, upsertDevice } from '@/lib/db';
 import { DEVICE_COOKIE, deviceCookieOptions, issueDeviceId, isValidDeviceId } from '@/lib/device';
 import { normalizeCode } from '@/lib/voucher-code';
 
 export async function POST(request: NextRequest) {
   try {
-    const { code, ip, mac, duration, download, upload } = await request.json();
+    const { code, ip, mac } = await request.json();
 
     const normalized = normalizeCode(String(code || ''));
     if (!normalized || !ip) {
       return NextResponse.json({ error: 'code and ip are required' }, { status: 400 });
     }
+
+    // Plan limits come from the voucher row — the client cannot choose speeds.
+    const voucher = await getVoucher(normalized);
+    if (!voucher) {
+      return NextResponse.json({ error: 'Voucher not found' }, { status: 404 });
+    }
+    const duration = voucher.duration_seconds;
+    const download = voucher.download_kbps;
+    const upload = voucher.upload_kbps;
 
     const cookieId = request.cookies.get(DEVICE_COOKIE)?.value;
     const deviceId = isValidDeviceId(cookieId) ? cookieId : issueDeviceId();
@@ -26,9 +35,9 @@ export async function POST(request: NextRequest) {
         code: normalized,
         ip,
         mac: mac || '',
-        duration: duration || 3600,
-        download: download || 10240,
-        upload: upload || 2048,
+        duration,
+        download,
+        upload,
       });
       const response = NextResponse.json(result);
       response.cookies.set(DEVICE_COOKIE, deviceId, deviceCookieOptions());
@@ -39,15 +48,24 @@ export async function POST(request: NextRequest) {
       code: normalized,
       ip,
       mac: mac || '',
-      duration: duration || 3600,
-      download: download || 10240,
-      upload: upload || 2048,
+      duration,
+      download,
+      upload,
     });
-    const cmd = await enqueueRouterCommand('authorize', { code: normalized, ip, payload });
+    const cmd = await enqueueRouterCommand('authorize', {
+      code: normalized,
+      ip,
+      payload,
+      routerId: await resolveRouterId(),
+    });
     const response = NextResponse.json({
       success: true,
       queued: true,
       id: cmd.id,
+      plan: voucher.plan_id,
+      duration,
+      download,
+      upload,
       message: 'Authorization queued for router',
     });
     response.cookies.set(DEVICE_COOKIE, deviceId, deviceCookieOptions());

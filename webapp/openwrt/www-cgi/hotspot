@@ -220,11 +220,20 @@ do_unblock() {
 }
 
 # --- qos ------------------------------------------------------------------
-# kbps rates. Class id derived from last IP octet (same as hotspot-voucher.sh).
-# For an existing class use `tc class change`, not `add`.
+# Policy: internet is distributed ONLY via per-voucher plan classes.
+#
+# Packet paths for routed traffic (no ifb/mirred needed):
+#   download (WAN→client): egress br-lan, dst=client  → class rate = plan dl
+#   upload   (client→WAN): egress WAN,   src=client  → class rate = plan ul
+# The HTB default class (1:10) on both devices is tiny so any client without
+# a voucher class gets ~no bandwidth (fail closed).
 
 class_for_ip() {
     printf '1:%s' "$(printf '%s' "$1" | cut -d. -f4)"
+}
+
+wan_dev() {
+    ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
 }
 
 class_exists() {
@@ -244,10 +253,44 @@ apply_qos_dev() {
 
 ensure_htb_root() {
     local dev="$1"
+    [ -n "$dev" ] || return 1
     tc qdisc show dev "$dev" 2>/dev/null | grep -q 'qdisc htb 1:' || \
         tc qdisc add dev "$dev" root handle 1: htb default 10 2>/dev/null
     tc class show dev "$dev" 2>/dev/null | grep -q 'classid 1:1' || \
         tc class add dev "$dev" parent 1: classid 1:1 htb rate 1000mbit 2>/dev/null
+    # Fail-closed default class: non-voucher traffic stays near-zero.
+    tc class show dev "$dev" 2>/dev/null | grep -q 'classid 1:10' || \
+        tc class add dev "$dev" parent 1:1 classid 1:10 htb rate 8kbit ceil 8kbit 2>/dev/null || true
+}
+
+ensure_shaping() {
+    command -v tc >/dev/null 2>&1 || return 1
+    ensure_htb_root br-lan || return 1
+    local wan
+    wan=$(wan_dev)
+    [ -n "$wan" ] || return 1
+    ensure_htb_root "$wan"
+}
+
+# Shape one client to its plan rates (download kbps, upload kbps).
+apply_plan_qos() {
+    local ip="$1" dl="$2" ul="$3"
+    ensure_shaping || return 1
+    local cid wan
+    cid=$(class_for_ip "$ip")
+    wan=$(wan_dev)
+
+    # Download: routed out br-lan toward the client
+    apply_qos_dev br-lan "$cid" "$dl"
+    tc filter show dev br-lan 2>/dev/null | grep -q "flowid $cid" || \
+        tc filter add dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" flowid "$cid" 2>/dev/null || true
+
+    # Upload: routed out WAN toward the internet
+    if [ -n "$wan" ]; then
+        apply_qos_dev "$wan" "$cid" "$ul"
+        tc filter show dev "$wan" 2>/dev/null | grep -q "flowid $cid" || \
+            tc filter add dev "$wan" protocol ip parent 1:0 prio 1 u32 match ip src "$ip" flowid "$cid" 2>/dev/null || true
+    fi
 }
 
 do_qos() {
@@ -261,21 +304,7 @@ do_qos() {
     [ -n "$ul" ] || fail "upload kbps required"
 
     command -v tc >/dev/null 2>&1 || fail "tc not available"
-
-    ensure_htb_root br-lan
-    ensure_htb_root ifb0 2>/dev/null || true
-
-    local cid
-    cid=$(class_for_ip "$ip")
-    # br-lan egress = upload from client perspective in existing voucher script
-    apply_qos_dev br-lan "$cid" "$ul"
-    apply_qos_dev ifb0 "$cid" "$dl"
-
-    # Make sure a filter points at this class (idempotent-ish: try add, ignore fail)
-    tc filter show dev br-lan 2>/dev/null | grep -q "flowid $cid" || \
-        tc filter add dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" flowid "$cid" 2>/dev/null || true
-    tc filter show dev ifb0 2>/dev/null | grep -q "flowid $cid" || \
-        tc filter add dev ifb0 protocol ip parent 1:0 prio 1 u32 match ip src "$ip" flowid "$cid" 2>/dev/null || true
+    apply_plan_qos "$ip" "$dl" "$ul"
 
     respond "{\"success\":true,\"ip\":\"$(json_escape "$ip")\",\"download\":${dl},\"upload\":${ul}}"
 }
@@ -304,30 +333,20 @@ do_authorize() {
         "$code" "${mac:-unknown}" "$ip" "$started" "$duration" "$download" "$upload" \
         >> "$VOUCHER_LOG"
 
-    if command -v hotspot-voucher >/dev/null 2>&1; then
-        # Reuse script for tc setup if present (best-effort)
-        hotspot-voucher apply "$code" "$mac" "$ip" >/dev/null 2>&1 || true
-    elif command -v tc >/dev/null 2>&1; then
-        local cid
-        cid=$(class_for_ip "$ip")
-        ensure_htb_root br-lan
-        ensure_htb_root ifb0 2>/dev/null || true
-        apply_qos_dev br-lan "$cid" "$upload"
-        apply_qos_dev ifb0 "$cid" "$download"
-    fi
+    # Plan limits are enforced here: per-IP HTB class at the voucher's rates.
+    # Fail closed — if tc is unavailable the client stays on the tiny default class.
+    apply_plan_qos "$ip" "$download" "$upload" || true
 
     # Schedule cleanup in background (no nohup on busybox; redirect all fds)
     ( sleep "$duration"; \
-      if command -v hotspot-voucher >/dev/null 2>&1; then \
-        hotspot-voucher cleanup "$code" "$ip" >/dev/null 2>&1; \
-      else \
-        sed -i "/^$code /d" "$VOUCHER_LOG" 2>/dev/null || true; \
-        cid=$(class_for_ip "$ip"); \
-        tc filter del dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" 2>/dev/null || true; \
-        tc class del dev br-lan parent 1:1 classid "$cid" 2>/dev/null || true; \
-        tc filter del dev ifb0 protocol ip parent 1:0 prio 1 u32 match ip src "$ip" 2>/dev/null || true; \
-        tc class del dev ifb0 parent 1:1 classid "$cid" 2>/dev/null || true; \
-      fi \
+      cid=$(class_for_ip "$ip"); wan=$(wan_dev); \
+      tc filter del dev br-lan protocol ip parent 1:0 prio 1 u32 match ip dst "$ip" 2>/dev/null; \
+      tc class del dev br-lan parent 1:1 classid "$cid" 2>/dev/null; \
+      if [ -n "$wan" ]; then \
+        tc filter del dev "$wan" protocol ip parent 1:0 prio 1 u32 match ip src "$ip" 2>/dev/null; \
+        tc class del dev "$wan" parent 1:1 classid "$cid" 2>/dev/null; \
+      fi; \
+      sed -i "/^$code /d" "$VOUCHER_LOG" 2>/dev/null; \
     ) >/dev/null 2>&1 &
 
     respond "{\"success\":true}"

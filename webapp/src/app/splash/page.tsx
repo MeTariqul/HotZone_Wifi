@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button, Badge, Alert, Spinner } from '@/components/ui';
@@ -34,6 +34,7 @@ function SplashContent() {
   const clientMac = searchParams.get('mac') || '';
   const routerHost = searchParams.get('router') || '192.168.1.1';
   const routerSecret = searchParams.get('secret') || '';
+  const autoCode = searchParams.get('auto') === '1' ? searchParams.get('code') || '' : '';
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -46,6 +47,7 @@ function SplashContent() {
     upload: number;
   } | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const autoStarted = useRef(false);
 
   useEffect(() => {
     fetch('/api/plans')
@@ -54,9 +56,9 @@ function SplashContent() {
       .catch(() => {});
   }, []);
 
-  const handleVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!code.trim()) return;
+  const submitCode = async (rawCode: string) => {
+    const trimmed = rawCode.trim().toUpperCase();
+    if (!trimmed) return;
     setVerifying(true);
     setResult(null);
 
@@ -64,7 +66,7 @@ function SplashContent() {
       const res = await fetch('/api/vouchers/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code.trim().toUpperCase() }),
+        body: JSON.stringify({ code: trimmed }),
       });
       const data = await res.json();
 
@@ -102,12 +104,19 @@ function SplashContent() {
                 code: data.code,
                 ip: clientIp,
                 mac: clientMac,
-                duration: data.duration,
-                download: data.download,
-                upload: data.upload,
               }),
             });
           }
+        } else if (clientIp) {
+          await fetch('/api/vouchers/authorize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: data.code,
+              ip: clientIp,
+              mac: clientMac,
+            }),
+          });
         }
 
         setResult('success');
@@ -121,6 +130,20 @@ function SplashContent() {
       setMessage('Connection failed. Please try again.');
     }
     setVerifying(false);
+  };
+
+  // Auto-redeem when arriving from /success (code prefilled, auto=1).
+  useEffect(() => {
+    if (!autoCode || autoStarted.current) return;
+    autoStarted.current = true;
+    setCode(autoCode);
+    submitCode(autoCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCode]);
+
+  const handleVerify = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitCode(code);
   };
 
   if (result === 'success' && planInfo) {
