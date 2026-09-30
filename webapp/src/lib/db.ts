@@ -151,6 +151,19 @@ async function runInit(): Promise<void> {
     );
   `;
 
+  await sql`ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS device_id TEXT`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      last_mac TEXT,
+      last_ip TEXT,
+      redeem_count INTEGER NOT NULL DEFAULT 0
+    );
+  `;
+
   const count = await sql`SELECT COUNT(*) as c FROM plans`;
   if (Number(count[0].c) === 0) {
     await sql`
@@ -202,6 +215,7 @@ export interface Voucher {
   created_at: number;
   source: string;
   note: string | null;
+  device_id: string | null;
 }
 
 export interface Payment {
@@ -354,6 +368,7 @@ export async function completePayment(paymentId: string): Promise<{ payment: Pay
     created_at: now,
     source: 'payment',
     note: payment.discount_code,
+    device_id: null,
   };
 
   return {
@@ -556,6 +571,7 @@ export async function createFreeVouchers(
       created_at: now,
       source: 'admin',
       note: note || null,
+      device_id: null,
     });
   }
 
@@ -908,4 +924,55 @@ export async function listAuditLogs(limit = 100): Promise<AuditLogEntry[]> {
     ORDER BY created_at DESC, id DESC
     LIMIT ${limit}
   `) as AuditLogEntry[];
+}
+
+export async function upsertDevice(
+  deviceId: string,
+  info: { mac?: string | null; ip?: string | null } = {}
+): Promise<void> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  const mac = info.mac || null;
+  const ip = info.ip || null;
+  await sql`
+    INSERT INTO devices (id, first_seen_at, last_seen_at, last_mac, last_ip, redeem_count)
+    VALUES (${deviceId}, ${now}, ${now}, ${mac}, ${ip}, 0)
+    ON CONFLICT (id) DO UPDATE SET
+      last_seen_at = ${now},
+      last_mac = COALESCE(${mac}, devices.last_mac),
+      last_ip = COALESCE(${ip}, devices.last_ip)
+  `;
+}
+
+/**
+ * Marks a voucher redeemed on its first authorize (analytics + device binding).
+ * Subsequent re-redeems are allowed and do not change the original binding.
+ */
+export async function redeemVoucher(
+  code: string,
+  info: { mac?: string | null; deviceId?: string | null } = {}
+): Promise<'redeemed' | 'already' | 'missing'> {
+  await initDb();
+  const sql = getSql();
+  const now = Math.floor(Date.now() / 1000);
+  const updated = await sql`
+    UPDATE vouchers
+    SET used = 1,
+        used_by_mac = COALESCE(${info.mac || null}, used_by_mac),
+        used_at = ${now},
+        device_id = COALESCE(${info.deviceId || null}, device_id)
+    WHERE code = ${code} AND used = 0
+    RETURNING code
+  `;
+  if (updated.length > 0) {
+    if (info.deviceId) {
+      await sql`
+        UPDATE devices SET redeem_count = redeem_count + 1 WHERE id = ${info.deviceId}
+      `;
+    }
+    return 'redeemed';
+  }
+  const exists = await sql`SELECT 1 as x FROM vouchers WHERE code = ${code}`;
+  return exists.length > 0 ? 'already' : 'missing';
 }

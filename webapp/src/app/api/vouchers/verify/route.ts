@@ -1,11 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getVoucher } from '@/lib/db';
+import { normalizeCode } from '@/lib/voucher-code';
+import { DEVICE_COOKIE, deviceCookieOptions, issueDeviceId, isValidDeviceId } from '@/lib/device';
 
-const CODE_RE = /^[A-Z0-9-]{4,32}$/;
+function devicePayload(voucher: {
+  code: string;
+  plan_id: string;
+  duration_seconds: number;
+  download_kbps: number;
+  upload_kbps: number;
+  used: number;
+}) {
+  return {
+    valid: true,
+    code: voucher.code,
+    plan: voucher.plan_id,
+    duration: voucher.duration_seconds,
+    download: voucher.download_kbps,
+    upload: voucher.upload_kbps,
+    reused: voucher.used === 1,
+  };
+}
 
-function normalizeCode(raw: string): string | null {
-  const code = raw.toUpperCase().trim();
-  return CODE_RE.test(code) ? code : null;
+function withDeviceCookie(response: NextResponse, request: NextRequest): string {
+  const existing = request.cookies.get(DEVICE_COOKIE)?.value;
+  const deviceId = isValidDeviceId(existing) ? existing : issueDeviceId();
+  response.cookies.set(DEVICE_COOKIE, deviceId, deviceCookieOptions());
+  return deviceId;
 }
 
 export async function GET(request: NextRequest) {
@@ -23,18 +44,10 @@ export async function GET(request: NextRequest) {
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }
-  if (voucher.used) {
-    return NextResponse.json({ valid: false, error: 'Voucher already used' }, { status: 400 });
-  }
 
-  return NextResponse.json({
-    valid: true,
-    code: voucher.code,
-    plan: voucher.plan_id,
-    duration: voucher.duration_seconds,
-    download: voucher.download_kbps,
-    upload: voucher.upload_kbps,
-  });
+  const response = NextResponse.json(devicePayload(voucher));
+  withDeviceCookie(response, request);
+  return response;
 }
 
 export async function POST(request: NextRequest) {
@@ -48,16 +61,8 @@ export async function POST(request: NextRequest) {
   if (!voucher) {
     return NextResponse.json({ valid: false, error: 'Voucher not found' }, { status: 404 });
   }
-  if (voucher.used) {
-    return NextResponse.json({ valid: false, error: 'Voucher already used' }, { status: 400 });
-  }
 
-  return NextResponse.json({
-    valid: true,
-    code: voucher.code,
-    plan: voucher.plan_id,
-    duration: voucher.duration_seconds,
-    download: voucher.download_kbps,
-    upload: voucher.upload_kbps,
-  });
+  const response = NextResponse.json(devicePayload(voucher));
+  withDeviceCookie(response, request);
+  return response;
 }

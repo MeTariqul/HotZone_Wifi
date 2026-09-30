@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (`bf87a35` fix pushed via MeTariqul; Vercel 200s; smoke tests + tsc/lint/build clean).
+> Last updated: 2026-09-30 (device identity cookie + first-redeem tracking + `npm test`; verified tsc/lint/build/smoke).
 
 ---
 
@@ -66,6 +66,8 @@ Admin /admin ──► reads router_snapshots + queues commands (no LAN path)
 
 **Staleness:** `STALE_SECONDS = 90`, `ROUTER_ONLINE_SECONDS = 90` (`webapp/src/lib/db.ts`).
 
+**Device identity:** httpOnly cookie `hz_device` (UUID, 365d) issued on `/api/vouchers/verify`; bound on `/api/vouchers/authorize` → `devices` + first redeem sets `vouchers.used/device_id/used_by_mac`. Verify allows re-redeem (`reused: true`) so expired sessions can reuse the code.
+
 ---
 
 ## Routes
@@ -111,6 +113,8 @@ Schema created/migrated lazily in `initDb()` (`webapp/src/lib/db.ts`). Tables:
 | `router_snapshots` | PK `(router_id, kind)` — kinds `status`\|`clients`\|`active` |
 | `router_commands` | queue; 60s stale reclaim; `router_id` nullable (legacy `''`) |
 | `audit_logs` | Admin mutations: generate, discount, router meta, device commands |
+| `devices` | Stable guest `device_id` (cookie `hz_device`); last MAC/IP, redeem_count |
+| `vouchers.device_id` | Set on first authorize (analytics/device binding) |
 
 Legacy SQLite at `webapp/data/hotspot.db` is **unused**.
 
@@ -168,6 +172,7 @@ npm run dev          # Next dev
 npm run build
 npm run lint         # eslint
 npx tsc --noEmit     # typecheck
+npm test             # unit tests (tests/*.test.ts)
 
 # Router
 ssh root@192.168.1.1
@@ -176,7 +181,7 @@ tail -f /var/log/hotspot.log
 REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/cgi-bin/hotspot
 ```
 
-**Verification before claiming a change works:** `npx tsc --noEmit` && `npm run lint` (from `webapp/`).
+**Verification before claiming a change works:** `npx tsc --noEmit` && `npm run lint` && `npm test` (from `webapp/`).
 
 ---
 
@@ -200,18 +205,18 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 | Admin | Search/status filter, CSV export, Audit tab, Live tab |
 | Analytics | `/analytics` server page |
 | Typecheck / lint | Clean (`npx tsc --noEmit` && `npm run lint`); `npm run build` also clean |
-| Tests / CI | No automated suite; local smoke tests (2026-09-30): pages 200, auth 401→login→200, generate/audit/export/discount/verify OK, concurrent `/analytics` 5×200 |
+| Tests / CI | `npm test` (6 unit tests: device id, voucher code); smoke tests 2026-09-30 (verify cookie → authorize → redeem row); no CI yet |
 | Root README | Stub |
 | Git / deploy | `a6cbfc0` + fix `bf87a35` on `origin/main` (push as **MeTariqul**) → Vercel live |
 
 ### Open / known gaps
 
-- No automated tests or CI (smoke tests run manually)
+- No CI (unit tests exist: `npm test`)
 - Payment gateway is demo-only
 - `hotspot-voucher.sh` hardcodes production `api_base`
 - Legacy snapshots under router_id `''` remain in DB (harmless)
 - Clock skew can make `age_seconds` slightly negative (still counts as online)
-- Fixed 2026-09-30: `initDb` concurrent cold start (`42P16` PK re-add) + `name[]`/`text[]` cast in migration DO block
+- Fixed 2026-09-30: `initDb` concurrent cold start (`42P16`) + `name[]` cast; **vouchers were never marked used** (now on authorize)
 
 ---
 
@@ -219,6 +224,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | Device identity cookie `hz_device`, first-redeem marking, `npm test` unit suite |
 | 2026-09-30 | `bf87a35` pushed (MeTariqul): fix `initDb` race + idempotent PK migration; smoke tests pass |
 | 2026-09-30 | Smoke tests; found/fixed `initDb` cold-start `42P16` + `name[]` cast |
 | 2026-09-23 | `a6cbfc0` + `5e80f71` pushed & verified live on Vercel |
