@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (router UI splash restyle + LuCI admin access via :8080/443 + admin Router-admin link; `admin_url` column).
+> Last updated: 2026-09-30 (`ddbaa0d` router splash restyle + LuCI admin access + admin Router-admin link; verified live).
 
 ---
 
@@ -227,7 +227,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
-| 2026-09-30 | Router UI: NDS splash restyled to HotZone (live `/api/plans` + CORS); LuCI admin reachable at `:8080/cgi-bin/luci` & `https://` (NDS `users_to_router` + `uhttpd.portal.lua_prefix`); admin **Router admin** link + `routers.admin_url` |
+| 2026-09-30 | `ddbaa0d` pushed: NDS splash restyled to HotZone (live `/api/plans` + CORS); LuCI at `:8080/cgi-bin/luci` & `https://` (`users_to_router` + `uhttpd.portal.lua_prefix`); admin **Router admin** link + `routers.admin_url` |
 | 2026-09-30 | `c74dc72` pushed: real-time sync — 2s heartbeat, CRLF CGI fix, immediate ack flush, multi-snapshot GET, admin 2s live refresh; deployed to router |
 | 2026-09-30 | `16d5cd3` pushed: device identity cookie `hz_device`, first-redeem tracking, `npm test` |
 | 2026-09-30 | Device identity cookie `hz_device`, first-redeem marking, `npm test` unit suite |
