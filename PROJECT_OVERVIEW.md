@@ -1,7 +1,7 @@
 # HotZone / Tarif Hotspot — Project Overview
 
 > Living document. **Update this file after every meaningful code, config, doc, or deploy change.**
-> Last updated: 2026-09-30 (real-time sync: 2s heartbeat, CRLF CGI fix, live admin auto-refresh; deployed to router).
+> Last updated: 2026-09-30 (`c74dc72` real-time sync pushed: 2s heartbeat, CRLF CGI fix, live admin refresh; deployed to router).
 
 ---
 
@@ -227,7 +227,7 @@ REQUEST_METHOD=GET QUERY_STRING=status HTTP_AUTHORIZATION="Bearer $SEC" sh /www/
 
 | Date | Change |
 |------|--------|
-| 2026-09-30 | Real-time sync: 2s heartbeat, CRLF CGI body fix (status/clients were empty), immediate ack flush, multi-snapshot GET, admin 2s live refresh; deployed to router |
+| 2026-09-30 | `c74dc72` pushed: real-time sync — 2s heartbeat, CRLF CGI fix, immediate ack flush, multi-snapshot GET, admin 2s live refresh; deployed to router |
 | 2026-09-30 | `16d5cd3` pushed: device identity cookie `hz_device`, first-redeem tracking, `npm test` |
 | 2026-09-30 | Device identity cookie `hz_device`, first-redeem marking, `npm test` unit suite |
 | 2026-09-30 | `bf87a35` pushed (MeTariqul): fix `initDb` race + idempotent PK migration; smoke tests pass |
