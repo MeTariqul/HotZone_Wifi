@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HotZone Web Interface Preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { text-align: center; color: #38bdf8; margin-bottom: 8px; }
+    .subtitle { text-align: center; color: #94a3b8; margin-bottom: 40px; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px; }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover { transform: translateY(-4px); box-shadow: 0 20px 40px -12px rgba(0,0,0,0.5); }
+    .card img { width: 100%; height: auto; display: block; }
+    .card-body { padding: 20px; }
+    .card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #38bdf8; }
+    .card p { color: #94a3b8; font-size: 14px; line-height: 1.6; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+    .badge-success { background: #064e3b; color: #6ee7b7; }
+    .badge-pending { background: #451a2a; color: #fca5a5; }
+    .note { text-align: center; margin-top: 40px; color: #64748b; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>HotZone Web Interface Preview</h1>
+    <p class="subtitle">Captive Portal Payment System - Generated Screenshots</p>
+
+    <div class="gallery">
+      <div class="card">
+        <img src="01_landing.png" alt="Landing Page">
+        <div class="card-body">
+          <h3>Landing Page <span class="badge badge-success">Captured</span></h3>
+          <p>Plan selection with 5 tiers (Trial, Hourly, Daily, Weekly, Monthly). Users select a plan and proceed to payment.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <img src="02_payment.png" alt="Payment Page">
+        <div class="card-body">
+          <h3>Payment Page <span class="badge badge-success">Captured</span></h3>
+          <p>Mock payment flow for bKash/Nagad via UddoktaPay. Generates voucher code on completion.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="background: #1e293b; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; color: #64748b; border-bottom: 1px solid #334155;">
+          Not Captured Yet
+        </div>
+        <div class="card-body">
+          <h3>Success Page <span class="badge badge-pending">Pending</span></h3>
+          <p>Shows generated voucher code after payment. Client-side component using useSearchParams.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="background: #1e293b; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; color: #64748b; border-bottom: 1px solid #334155;">
+          Not Captured Yet
+        </div>
+        <div class="card-body">
+          <h3>Admin Dashboard <span class="badge badge-pending">Pending</span></h3>
+          <p>Voucher management, stats, and manual generation. Client-side with tabs and interactivity.</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="note">Run <code>python3 preview.py</code> to regenerate captures. Requires Chrome/Chromium and Selenium.</p>
+  </div>
+</body>
+</html>
